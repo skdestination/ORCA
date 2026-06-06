@@ -1,7 +1,9 @@
 {
   "name": "ORCA Video Editor",
   "description": "A lightweight, intuitive video editing app with a modern frosted-glass interface.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "microphone"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

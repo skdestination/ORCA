@@ -4,7 +4,6 @@
   "version": "1.4.0",
   "type": "module",
   "scripts": {
-    "postinstall": "node -e \"const fs=require('fs');const p='node_modules/@richardaware74/capacitor-ffmpeg-kit/android/build.gradle';if(fs.existsSync(p)){let c=fs.readFileSync(p,'utf8');c=c.replace(/'com.arthenica:ffmpeg-kit-full:6.0-2'/g, \\\"'com.arthenica:ffmpeg-kit-full:6.0.LTS'\\\"); fs.writeFileSync(p,c);console.log('Patched ffmpeg-kit version to 6.0.LTS');}\"",
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "cap:sync": "cap sync",

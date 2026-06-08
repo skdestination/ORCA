@@ -1,6 +1,14 @@
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Filesystem, Directory } from "@capacitor/filesystem";
-import { FFmpegKitPlugin } from "@richardaware74/capacitor-ffmpeg-kit";
+
+export interface SmoothSlowMotionPlugin {
+  interpolateVideo(options: { 
+    inputPath: string; 
+    outputPath: string; 
+  }): Promise<{ success: boolean; outputPath: string }>;
+}
+
+const SmoothSlowMotion = registerPlugin<SmoothSlowMotionPlugin>("SmoothSlowMotion");
 
 export async function processSmoothSlowMoBrowser(
   videoBlobUrlOrBlob: string | Blob,
@@ -9,7 +17,7 @@ export async function processSmoothSlowMoBrowser(
 ): Promise<{ url: string; fileId: string }> {
 
   if (!Capacitor.isNativePlatform()) {
-    // Web Fallback: bypass processing since WASM is hanging and we agreed to focus on Android locally.
+    // Web Fallback
     console.log("Web platform detected. Bypassing smooth slow motion to avoid WASM hanging.");
     const url = typeof videoBlobUrlOrBlob === "string" 
       ? videoBlobUrlOrBlob 
@@ -18,7 +26,7 @@ export async function processSmoothSlowMoBrowser(
   }
 
   // Focus on Native processing
-  console.log("Native platform detected. Processing FFmpeg locally.");
+  console.log("Native platform detected. Processing via Optical Flow.");
   const inputFileName = `input_${Date.now()}.mp4`;
   const outputFileName = `output_${Date.now()}.mp4`;
   
@@ -49,11 +57,6 @@ export async function processSmoothSlowMoBrowser(
     path: outputFileName
   });
 
-  const ptsMultiplier = 1 / speedFactor;
-  // FFmpeg command to apply minterpolate for smooth slow-motion
-  const filterString = `setpts=${ptsMultiplier}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir`;
-  
-  // Fake progression since CLI execute doesn't return progress callback via bridging plugin
   let fakeProgress = 1;
   const progressInterval = setInterval(() => {
     fakeProgress = Math.min(95, fakeProgress + 5);
@@ -63,15 +66,18 @@ export async function processSmoothSlowMoBrowser(
   // Command needs plain paths without file:// prefix for executeFFmpegCommand
   const rawInput = inputUri.uri.replace("file://", "");
   const rawOutput = outputUri.uri.replace("file://", "");
-  const command = `-i '${rawInput}' -vf "${filterString}" -c:v mpeg4 -q:v 2 '${rawOutput}'`;
 
   try {
-    const result = await FFmpegKitPlugin.executeFFmpegCommand({ command });
+    const result = await SmoothSlowMotion.interpolateVideo({ 
+      inputPath: rawInput, 
+      outputPath: rawOutput 
+    });
+
     clearInterval(progressInterval);
     onProgress(100);
 
-    if (result.returnCode !== 0) {
-      throw new Error(`FFmpeg exited with code ${result.returnCode}`);
+    if (!result.success) {
+      throw new Error(`Native optical flow plugin failed`);
     }
 
     const finalUrl = Capacitor.convertFileSrc(outputUri.uri);
@@ -82,7 +88,7 @@ export async function processSmoothSlowMoBrowser(
 
   } catch (err: any) {
     clearInterval(progressInterval);
-    console.error("FFmpeg native command failed", err);
+    console.error("Optical Flow native command failed", err);
     throw err;
   }
 }

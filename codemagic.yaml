@@ -9,7 +9,7 @@ workflows:
       - name: Install NPM dependencies
         script: npm install
       - name: Install Capacitor Android package
-        script: npm install @capacitor/android@6
+        script: npm install @capacitor/android@5
       - name: Build React App
         script: npm run build
       - name: Add Android Platform

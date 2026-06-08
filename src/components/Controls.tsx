@@ -34,9 +34,11 @@ export function CompactRulerControl({
   max: number;
   onChange: (val: number) => void;
   onReset: () => void;
-  onClose: () => void;
+  onClose?: () => void;
   sensitivity?: number;
   label?: string;
+  step?: number;
+  unit?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);

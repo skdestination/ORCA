@@ -1,76 +1,102 @@
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { Capacitor } from "@capacitor/core";
+import { Filesystem, Directory } from "@capacitor/filesystem";
+import { FFmpegKitPlugin } from "@richardaware74/capacitor-ffmpeg-kit";
 
 export async function processSmoothSlowMoBrowser(
   videoBlobUrlOrBlob: string | Blob,
   speedFactor: number,
   onProgress: (progress: number) => void
 ): Promise<{ url: string; fileId: string }> {
-  const ffmpeg = new FFmpeg();
-  
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress(progress * 100);
-  });
 
-  const baseURL = "https://unpkg.com/@ffmpeg/core-gpl@0.12.6/dist/esm";
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-  });
-
-  const inputName = "input.mp4";
-  const outputName = "output.mp4";
-
-  try {
-    console.log("FFmpeg: Attempting to process:", typeof videoBlobUrlOrBlob === "string" ? videoBlobUrlOrBlob : "Blob");
-    let data: Uint8Array;
-    if (videoBlobUrlOrBlob instanceof Blob) {
-      data = new Uint8Array(await videoBlobUrlOrBlob.arrayBuffer());
-    } else if (typeof videoBlobUrlOrBlob === "string" && videoBlobUrlOrBlob.startsWith("blob:")) {
-      const response = await fetch(videoBlobUrlOrBlob);
-      const blob = await response.blob();
-      data = new Uint8Array(await blob.arrayBuffer());
-    } else if (typeof videoBlobUrlOrBlob === "string") {
-      data = await fetchFile(videoBlobUrlOrBlob);
-    } else {
-      throw new Error("Invalid video source type");
-    }
-    await ffmpeg.writeFile(inputName, data);
-  } catch (e) {
-    console.error("FFmpeg file loading failed", e);
-    throw new Error(`Failed to load video file: ${typeof videoBlobUrlOrBlob}`);
+  if (!Capacitor.isNativePlatform()) {
+    // Web Fallback: bypass processing since WASM is hanging and we agreed to focus on Android locally.
+    console.log("Web platform detected. Bypassing smooth slow motion to avoid WASM hanging.");
+    const url = typeof videoBlobUrlOrBlob === "string" 
+      ? videoBlobUrlOrBlob 
+      : URL.createObjectURL(videoBlobUrlOrBlob);
+    return { url, fileId: Date.now().toString() };
   }
+
+  // Focus on Native processing
+  console.log("Native platform detected. Processing FFmpeg locally.");
+  const inputFileName = `input_${Date.now()}.mp4`;
+  const outputFileName = `output_${Date.now()}.mp4`;
+  
+  // Write input file to Capacitor filesystem
+  let base64Data: string;
+  if (videoBlobUrlOrBlob instanceof Blob) {
+    base64Data = await convertBlobToBase64(videoBlobUrlOrBlob);
+  } else {
+    // String URL (blob:, http:, data:)
+    const response = await fetch(videoBlobUrlOrBlob);
+    const blob = await response.blob();
+    base64Data = await convertBlobToBase64(blob);
+  }
+
+  await Filesystem.writeFile({
+    path: inputFileName,
+    data: base64Data,
+    directory: Directory.Cache,
+  });
+
+  const inputUri = await Filesystem.getUri({
+    directory: Directory.Cache,
+    path: inputFileName
+  });
+  
+  const outputUri = await Filesystem.getUri({
+    directory: Directory.Cache,
+    path: outputFileName
+  });
 
   const ptsMultiplier = 1 / speedFactor;
-  // Make the video duration longer using setpts, then fill in missing frames to reach 30fps using MCI
-  const filterString = `setpts=${ptsMultiplier}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=obmc:me_mode=bidir:vsbmc=1`;
-
-  await ffmpeg.exec([
-    "-i",
-    inputName,
-    "-filter:v",
-    filterString,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "ultrafast",
-    "-pix_fmt",
-    "yuv420p",
-    outputName,
-  ]);
-
-  const outputData = await ffmpeg.readFile(outputName);
-  const outputBlob = new Blob([outputData], { type: "video/mp4" });
+  // FFmpeg command to apply minterpolate for smooth slow-motion
+  const filterString = `setpts=${ptsMultiplier}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir`;
   
-  const fileId = "F_smooth_" + Math.random().toString(36).substring(2, 9);
-  
+  // Fake progression since CLI execute doesn't return progress callback via bridging plugin
+  let fakeProgress = 1;
+  const progressInterval = setInterval(() => {
+    fakeProgress = Math.min(95, fakeProgress + 5);
+    onProgress(fakeProgress);
+  }, 1000);
+
+  // Command needs plain paths without file:// prefix for executeFFmpegCommand
+  const rawInput = inputUri.uri.replace("file://", "");
+  const rawOutput = outputUri.uri.replace("file://", "");
+  const command = `-i '${rawInput}' -vf "${filterString}" -c:v mpeg4 -q:v 2 '${rawOutput}'`;
+
   try {
-    const { storeFile } = await import("./db");
-    await storeFile(fileId, outputBlob);
-  } catch (err) {
-    console.warn("Storage failed for smooth slow-mo", err);
-  }
+    const result = await FFmpegKitPlugin.executeFFmpegCommand({ command });
+    clearInterval(progressInterval);
+    onProgress(100);
 
-  return { url: URL.createObjectURL(outputBlob), fileId };
+    if (result.returnCode !== 0) {
+      throw new Error(`FFmpeg exited with code ${result.returnCode}`);
+    }
+
+    const finalUrl = Capacitor.convertFileSrc(outputUri.uri);
+    return {
+      url: finalUrl,
+      fileId: outputUri.uri
+    };
+
+  } catch (err: any) {
+    clearInterval(progressInterval);
+    console.error("FFmpeg native command failed", err);
+    throw err;
+  }
+}
+
+function convertBlobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+        const result = reader.result as string;
+        const base64Str = result.split(',')[1];
+        resolve(base64Str);
+    };
+    reader.readAsDataURL(blob);
+  });
 }
 

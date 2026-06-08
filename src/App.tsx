@@ -979,12 +979,12 @@ export default function App() {
       setTimeout(() => {
         setPillPopup(null);
       }, 2000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setPillPopup({ message: "Failed to apply Slow-mo.", type: 'info' });
+      setPillPopup({ message: `Failed: ${err.message || 'unknown error'}`, type: 'info' });
       setTimeout(() => {
         setPillPopup(null);
-      }, 2000);
+      }, 5000);
       setSmoothProcessingProgress(null);
     }
   };
@@ -2715,11 +2715,11 @@ const renderEditor = () => (
             paddingBottom: "0px"
           }}
         >
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 flex-1 pr-2">
             <span className="text-zinc-300 font-mono text-[10px] sm:text-xs tracking-wider opacity-80 min-w-[40px] sm:min-w-[50px]">
               {formatTime(currentTime)}
             </span>
-            <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 className="w-6 h-6 sm:w-8 sm:h-8 bg-zinc-800 text-white rounded-full shadow flex items-center justify-center hover:bg-zinc-700 transition-colors m-0"
                 onClick={() => {
@@ -2749,9 +2749,9 @@ const renderEditor = () => (
             {selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "text" && (
               <motion.div 
                 initial={{ opacity: 0, width: 0 }}
-                animate={{ opacity: 1, width: "auto" }}
+                animate={{ opacity: 1, width: "100%" }}
                 exit={{ opacity: 0, width: 0 }}
-                className="ml-0.5 overflow-hidden"
+                className="ml-0.5 overflow-hidden flex-1"
               >
                 <input
                   type="text"
@@ -2764,21 +2764,21 @@ const renderEditor = () => (
                     );
                   }}
                   placeholder="Enter text..."
-                  className="bg-zinc-800 border border-white/10 rounded-full text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-white/30 focus:bg-zinc-700 transition-all placeholder:text-zinc-500 shadow-inner"
+                  className="bg-zinc-800 border border-white/10 rounded-full text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-white/30 focus:bg-zinc-700 transition-all placeholder:text-zinc-500 shadow-inner w-full"
                   style={{
-                    paddingLeft: "9px",
+                    paddingLeft: "12px",
                     marginTop: "1px",
                     paddingTop: "5px",
                     marginLeft: "0px",
                     paddingRight: "16px",
                     marginRight: "0px",
-                    width: "90px"
+                    paddingBottom: "5px"
                   }}
                 />
               </motion.div>
             )}
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center shrink-0">
             <div className="flex bg-zinc-800 rounded-full px-0.5 py-0.5 mr-1 sm:px-1 sm:py-1 sm:mr-2">
               <button
                 className={`p-1 sm:p-1.5 rounded-full transition-colors ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`}
@@ -3902,12 +3902,12 @@ const renderEditor = () => (
                             setSmoothProcessingProgress(null);
                             setPillPopup(null);
                           }, 2000);
-                        } catch (err) {
+                        } catch (err: any) {
                           console.error(err);
-                          setPillPopup({ message: "Failed to apply Slow-mo.", type: 'info' });
+                          setPillPopup({ message: `Failed: ${err.message || 'unknown error'}`, type: 'info' });
                           setTimeout(() => {
                             setPillPopup(null);
-                          }, 2000);
+                          }, 5000);
                           setSmoothProcessingProgress(null);
                         }
                       }}

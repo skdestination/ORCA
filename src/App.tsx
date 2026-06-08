@@ -50,7 +50,6 @@ import {
   Music,
   Download,
   Share,
-  Mic,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -110,7 +109,6 @@ type Clip = {
   opacity?: number;
   mixBlendMode?: "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light" | "difference" | "exclusion" | "hue" | "saturation" | "color" | "luminosity";
   keyframes?: Keyframe[];
-  objectFit?: "contain" | "cover";
 };
 
 type Project = {
@@ -249,80 +247,6 @@ function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu: string
   };
 }
 
-// Global cached audio peak storage and analyzer
-const peaksCache = new Map<string, number[]>();
-const pendingFetches = new Map<string, Promise<number[]>>();
-
-async function getAudioPeaks(src: string): Promise<number[]> {
-  if (peaksCache.has(src)) {
-    return peaksCache.get(src)!;
-  }
-  if (pendingFetches.has(src)) {
-    return pendingFetches.get(src)!;
-  }
-
-  const promise = (async () => {
-    try {
-      const response = await fetch(src);
-      if (!response.ok) throw new Error("Failed to fetch audio file");
-      const arrayBuffer = await response.arrayBuffer();
-      
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioCtxClass();
-      
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      
-      const channelData = audioBuffer.getChannelData(0);
-      const pointsBySecond = 40; // High resolution sampling density (40 samples per second of source audio)
-      const totalPoints = Math.max(10, Math.floor(audioBuffer.duration * pointsBySecond));
-      const chunkLen = Math.floor(channelData.length / totalPoints);
-      
-      const peaks: number[] = [];
-      for (let i = 0; i < totalPoints; i++) {
-        const start = i * chunkLen;
-        let max = 0;
-        const limit = Math.min(start + chunkLen, channelData.length);
-        for (let j = start; j < limit; j++) {
-          const val = Math.abs(channelData[j]);
-          if (val > max) max = val;
-        }
-        peaks.push(max);
-      }
-      
-      await audioCtx.close();
-
-      const maxPeak = Math.max(...peaks, 0.01);
-      const normalized = peaks.map(p => {
-        // Soft audio compression curve to bring up minor frequencies for standard CapCut-style filled wave detail
-        const norm = p / maxPeak;
-        return Math.pow(norm, 0.62); 
-      });
-
-      peaksCache.set(src, normalized);
-      return normalized;
-    } catch (err) {
-      console.error("Error decoding audio for peaks:", err);
-      // Fallback: generates high-precision multi-harmonic organic peak wave shapes
-      const fallback: number[] = [];
-      const len = 400;
-      for (let i = 0; i < len; i++) {
-        const h1 = Math.sin(i * 0.04);
-        const h2 = Math.cos(i * 0.091);
-        const h3 = Math.sin(i * 0.17);
-        const val = 0.18 + 0.4 * Math.abs(h1) + 0.3 * Math.abs(h2 * h3) + 0.1 * Math.cos(i * 0.3);
-        fallback.push(Math.max(0.06, Math.min(0.92, val)));
-      }
-      peaksCache.set(src, fallback);
-      return fallback;
-    } finally {
-      pendingFetches.delete(src);
-    }
-  })();
-
-  pendingFetches.set(src, promise);
-  return promise;
-}
-
 export const DEFAULT_FLOW_BAR_ORDER = [
   'volume',
   'text',
@@ -336,7 +260,6 @@ export const DEFAULT_FLOW_BAR_ORDER = [
   'magic',
   'activity',
   'mask',
-  'voiceover',
 ];
 
 export default function App() {
@@ -418,54 +341,6 @@ export default function App() {
     useState<string>("9:16");
   const [layers, setLayers] = useState<Layer[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
-  
-  // Real Audio Waveform peak states
-  const [decodedWaveforms, setDecodedWaveforms] = useState<Record<string, number[]>>({});
-  const [loadingWaveforms, setLoadingWaveforms] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    let active = true;
-    const audioClips = clips.filter((c) => c.type === "audio");
-    audioClips.forEach((c) => {
-      const src = c.src;
-      if (!src) return;
-      if (decodedWaveforms[src] || loadingWaveforms[src]) return;
-
-      setLoadingWaveforms((prev) => {
-        if (prev[src]) return prev;
-        return { ...prev, [src]: true };
-      });
-
-      getAudioPeaks(src)
-        .then((peaks) => {
-          if (!active) return;
-          setDecodedWaveforms((prev) => {
-            if (prev[src] === peaks) return prev;
-            return { ...prev, [src]: peaks };
-          });
-          setLoadingWaveforms((prev) => {
-            if (!prev[src]) return prev;
-            const updated = { ...prev };
-            delete updated[src];
-            return updated;
-          });
-        })
-        .catch((err) => {
-          console.error("Peak extraction error for:", src, err);
-          if (!active) return;
-          setLoadingWaveforms((prev) => {
-            if (!prev[src]) return prev;
-            const updated = { ...prev };
-            delete updated[src];
-            return updated;
-          });
-        });
-    });
-    return () => {
-      active = false;
-    };
-  }, [clips, decodedWaveforms, loadingWaveforms]);
-
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = normal, 2 = zoomed in
@@ -483,8 +358,6 @@ export default function App() {
   const [smoothProcessingProgress, setSmoothProcessingProgress] = useState<
     number | null
   >(null);
-  const [showSmoothOptions, setShowSmoothOptions] = useState(false);
-  const [smoothSlowMoMode, setSmoothSlowMoMode] = useState<"blend" | "optical-flow">("blend");
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const selectedClipId = selectedClipIds.length === 1 ? selectedClipIds[0] : null;
   const setSelectedClipId = (id: string | null) => setSelectedClipIds(id === null ? [] : [id]);
@@ -543,211 +416,6 @@ export default function App() {
   ]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const isUndoRedoAction = useRef(false);
-
-  // Voice Over Recording State and Refs
-  const [isRecordingVoiceOver, setIsRecordingVoiceOver] = useState(false);
-  const [voiceOverDuration, setVoiceOverDuration] = useState(0);
-  const [voiceOverPlayTimelineWhileRecording, setVoiceOverPlayTimelineWhileRecording] = useState(true);
-  const [micAudioLevel, setMicAudioLevel] = useState<number[]>(Array(15).fill(2));
-
-  const voiceOverMediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const voiceOverStreamRef = useRef<MediaStream | null>(null);
-  const voiceOverChunksRef = useRef<Blob[]>([]);
-  const voiceOverStartTimeOffsetRef = useRef<number>(0);
-  const voiceOverStartTimeRef = useRef<number>(0);
-  const voiceOverTimerRef = useRef<any>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameAudioRef = useRef<number | null>(null);
-
-  const addVoiceOverClip = useCallback(async (blob: Blob, startAtTime: number, duration: number) => {
-    const id = "VO_" + Math.random().toString(36).substring(2, 9);
-    const fileId = "F_" + id;
-    const src = URL.createObjectURL(blob);
-    
-    // Persist to IndexedDB caching
-    try {
-      if (navigator.storage && navigator.storage.persist) {
-        await navigator.storage.persist();
-      }
-      const { storeFile } = await import("./lib/db");
-      await storeFile(fileId, blob);
-    } catch(err) {
-      console.warn("Storage failed in Voice Over persistence", err);
-    }
-
-    // Find or create a dedicated "Voice Over" layer
-    const existingVoLayer = layers.find(l => l.name === "Voice Over");
-    let targetLayerId = existingVoLayer?.id;
-
-    if (!targetLayerId) {
-      const generatedId = "L_VO_" + Math.random().toString(36).substring(2, 9);
-      targetLayerId = generatedId;
-      const minOrder = layers.length > 0 ? Math.min(...layers.map(l => l.order)) : 0;
-      setLayers((prevLayers) => {
-        // Double check inside the updater to prevent duplicate layer creation
-        const existingVoLayer2 = prevLayers.find(l => l.name === "Voice Over");
-        if (existingVoLayer2) {
-          return prevLayers;
-        }
-        return [
-          ...prevLayers,
-          {
-            id: generatedId,
-            order: minOrder - 1,
-            isMuted: false,
-            isHidden: false,
-            name: "Voice Over",
-          }
-        ];
-      });
-    }
-
-    setClips((prevClips) => {
-      // In case of Strict Mode or other duplicate calls, let's guard against duplicate clip ID
-      if (prevClips.some(c => c.id === id)) {
-        return prevClips;
-      }
-      return [
-        ...prevClips,
-        {
-          id,
-          layerId: targetLayerId!,
-          type: "audio" as const,
-          src,
-          fileId,
-          leftSeconds: startAtTime,
-          durationSeconds: duration,
-          originalDurationSeconds: duration,
-          trimStartSeconds: 0,
-          volume: 100,
-        }
-      ];
-    });
-
-    showToast("Voice over recorded!");
-  }, [layers]);
-
-  const startVoiceOverRecording = async () => {
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showToast("Recording not supported or disabled in your browser.");
-        return;
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      voiceOverStreamRef.current = stream;
-      voiceOverChunksRef.current = [];
-      voiceOverStartTimeOffsetRef.current = currentTime;
-      voiceOverStartTimeRef.current = Date.now();
-
-      const recorder = new MediaRecorder(stream);
-      voiceOverMediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          voiceOverChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const recordedBlob = new Blob(voiceOverChunksRef.current, { type: "audio/webm" });
-        const finalDur = Math.max(1, (Date.now() - voiceOverStartTimeRef.current) / 1000);
-        await addVoiceOverClip(recordedBlob, voiceOverStartTimeOffsetRef.current, finalDur);
-        setIsRecordingVoiceOver(false);
-      };
-
-      recorder.start();
-
-      setVoiceOverDuration(0);
-      voiceOverTimerRef.current = setInterval(() => {
-        setVoiceOverDuration(Math.floor((Date.now() - voiceOverStartTimeRef.current) / 1000));
-      }, 1000);
-
-      // Audio Level Meter
-      try {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 32;
-        source.connect(analyser);
-        audioContextRef.current = audioCtx;
-        audioAnalyserRef.current = analyser;
-
-        const bufferLength = analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-
-        const updateLevel = () => {
-          if (!audioAnalyserRef.current) return;
-          analyser.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < bufferLength; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / bufferLength;
-          setMicAudioLevel((prev) => {
-            const next = [...prev];
-            next.shift();
-            // Map 0-255 average to 2px - 28px height
-            const height = Math.max(2, Math.min(28, Math.round((average / 255) * 28)));
-            next.push(height);
-            return next;
-          });
-          animationFrameAudioRef.current = requestAnimationFrame(updateLevel);
-        };
-        animationFrameAudioRef.current = requestAnimationFrame(updateLevel);
-      } catch (err) {
-        console.warn("Audio meter error: ", err);
-      }
-
-      setIsRecordingVoiceOver(true);
-      if (voiceOverPlayTimelineWhileRecording) {
-        setIsPlaying(true);
-      }
-    } catch (err) {
-      console.error("Recording start error", err);
-      showToast("Could not access microphone: " + (err as any).message);
-    }
-  };
-
-  const stopVoiceOverRecording = () => {
-    if (animationFrameAudioRef.current) {
-      cancelAnimationFrame(animationFrameAudioRef.current);
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-    }
-    if (voiceOverTimerRef.current) {
-      clearInterval(voiceOverTimerRef.current);
-      voiceOverTimerRef.current = null;
-    }
-    if (voiceOverPlayTimelineWhileRecording) {
-      setIsPlaying(false);
-    }
-    if (voiceOverMediaRecorderRef.current && voiceOverMediaRecorderRef.current.state !== "inactive") {
-      voiceOverMediaRecorderRef.current.stop();
-    }
-    if (voiceOverStreamRef.current) {
-      voiceOverStreamRef.current.getTracks().forEach((track) => track.stop());
-      voiceOverStreamRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (voiceOverTimerRef.current) {
-        clearInterval(voiceOverTimerRef.current);
-      }
-      if (animationFrameAudioRef.current) {
-        cancelAnimationFrame(animationFrameAudioRef.current);
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {});
-      }
-      if (voiceOverStreamRef.current) {
-        voiceOverStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, []);
 
   const historyStateRef = useRef({ history, historyIndex });
   useEffect(() => {
@@ -1231,7 +899,6 @@ export default function App() {
         durationSeconds: duration,
         originalDurationSeconds: duration,
         trimStartSeconds: 0,
-        objectFit: type === "audio" ? undefined : "contain",
       },
     ]);
   };
@@ -1474,19 +1141,18 @@ export default function App() {
       const newSrc = await processSmoothSlowMoBrowser(
         videoSource,
         currentClip.speed || 1,
-        smoothSlowMoMode,
         (progress) => {
-          setPillPopup({ message: `Applying Smooth Slow-mo (${smoothSlowMoMode === "blend" ? "Blending" : "Optical Flow"})...`, progress: Math.min(99, Math.round(progress)), type: 'loading' });
+          setPillPopup({ message: "Applying Smooth Slow-mo...", progress: Math.min(99, Math.round(progress)), type: 'loading' });
         }
       );
 
-      setPillPopup({ message: `Smooth Slow-mo Applied (${smoothSlowMoMode === "blend" ? "Blending" : "Optical Flow"})`, type: 'info' });
+      setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
 
       if (selectedClipId) {
         setClips((prev) =>
           prev.map((c) =>
             c.id === selectedClipId
-              ? { ...c, opticalFlow: true, smoothSlowMoMode, originalSrc: c.originalSrc || c.src, src: newSrc }
+              ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrc }
               : c,
           ),
         );
@@ -1789,28 +1455,6 @@ export default function App() {
     };
   }, [currentScreen]);
 
-  const lastTapRef = useRef<number>(0);
-
-  const handlePreviewDoubleClick = useCallback(() => {
-    if (!selectedClipId) return;
-    setClips((prev) =>
-      prev.map((c) => {
-        if (c.id !== selectedClipId) return c;
-        if (c.type !== "image" && c.type !== "video") return c;
-
-        const currentFit = c.objectFit === "cover" ? "contain" : "cover";
-        showToast(currentFit === "cover" ? "Set to Fill (Cover)" : "Set to Fit (Contain)");
-        return {
-          ...c,
-          objectFit: currentFit,
-          scale: 1,
-          translateX: 0,
-          translateY: 0,
-        };
-      })
-    );
-  }, [selectedClipId, showToast]);
-
   const previewTouchRef = useRef<{
     startX: number;
     startY: number;
@@ -1822,15 +1466,6 @@ export default function App() {
   } | null>(null);
 
   const handlePreviewTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1 && selectedClipId) {
-      const now = Date.now();
-      const DOUBLE_TAP_DELAY = 300;
-      if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
-        handlePreviewDoubleClick();
-      }
-      lastTapRef.current = now;
-    }
-
     if (e.touches.length === 2 && selectedClipId) {
       const clip = clips.find(c => c.id === selectedClipId);
       if (clip) {
@@ -2247,9 +1882,6 @@ export default function App() {
       case 'magic': return 'Magic';
       case 'activity': return 'Blend & Opacity';
       case 'mask': return 'Mask Shape';
-      case 'stabilize': return 'Stabilize';
-      case 'extract-audio': return 'Extract Audio';
-      case 'voiceover': return 'Voice Over';
       default: return key;
     }
   };
@@ -3073,7 +2705,6 @@ export default function App() {
               onTouchMove={handlePreviewTouchMove}
               onTouchEnd={handlePreviewTouchEnd}
               onTouchCancel={handlePreviewTouchEnd}
-              onDoubleClick={handlePreviewDoubleClick}
               className="absolute top-0 bottom-0 left-0 right-0 m-auto bg-black rounded-3xl overflow-hidden shadow-[20px_20px_60px_rgba(0,0,0,0.5)] border border-white/10"
               style={{
                 aspectRatio: currentProjectRatio.replace(":", "/"),
@@ -3181,7 +2812,7 @@ export default function App() {
                           <img
                             id={`clip-media-${activeClip.id}`}
                             src={activeClip.src}
-                            className={`w-full h-full ${activeClip.objectFit === "cover" ? "object-cover" : "object-contain"} pointer-events-none`}
+                            className="w-full h-full object-cover pointer-events-none"
                             crossOrigin="anonymous"
                             onError={() => handleClipError(activeClip.id)}
                           />
@@ -3217,7 +2848,7 @@ export default function App() {
                             currentTime={currentTime}
                             isPlaying={isPlaying}
                             isMuted={layer.isMuted}
-                            className={`w-full h-full ${activeClip.objectFit === "cover" ? "object-cover" : "object-contain"} pointer-events-none`}
+                            className="w-full h-full object-cover pointer-events-none"
                             onError={() => handleClipError(activeClip.id)}
                           />
                           {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
@@ -3940,119 +3571,57 @@ export default function App() {
                                   </>
                                 )}
                                 {clip.type === "audio" && (() => {
+                                  const seed = clip.id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                                  const freq1 = 0.07 + (seed % 7) * 0.015;
+                                  const freq2 = 0.14 + (seed % 11) * 0.012;
+                                  const freq3 = 0.03 + (seed % 5) * 0.008;
+
                                   const hasVolumeKeyframes = clip.keyframes?.some(k => k.properties.volume !== undefined);
                                   const constantVolume = typeof clip.volume === "number" ? clip.volume : 100;
                                   const constantVolMult = constantVolume / 100;
 
-                                  const clipWidth = clip.durationSeconds * pixelsPerSecond;
-                                  const spacing = 3.6; // professional dense spacing for vertical wave bars
-                                  const barCount = Math.max(1, Math.floor(clipWidth / spacing));
+                                  const barCount = 140;
                                   let pathD = "";
 
-                                  const peaks = decodedWaveforms[clip.src];
+                                  for (let i = 0; i < barCount; i++) {
+                                    const h1 = Math.sin(i * freq1);
+                                    const h2 = Math.cos(i * freq2);
+                                    const h3 = Math.sin(i * freq3);
+                                    
+                                    // Generate a premium fluid song acoustic pattern
+                                    let val = 0.12 + 0.38 * Math.abs(h1) + 0.32 * Math.abs(h2 * h3) + 0.12 * Math.sin(i * 0.3);
+                                    val = Math.max(0.06, Math.min(0.95, val));
 
-                                  if (peaks) {
-                                    for (let i = 0; i < barCount; i++) {
-                                      // Source playback speed & trim start offset handling
-                                      const tRel = (i * spacing) / pixelsPerSecond;
-                                      const tSource = tRel * (clip.speed || 1) + clip.trimStartSeconds;
-
-                                      // Map to peak sample index (we sample the source at 40 points per second)
-                                      const peakIndex = Math.round(tSource * 40);
-                                      let val = peaks[peakIndex];
-                                      if (val === undefined) {
-                                        val = 0.08; // silent baseline
-                                      }
-
-                                      // Factoring in the volume keyframes/interpolators dynamically!
-                                      let volMult = constantVolMult;
-                                      if (hasVolumeKeyframes && clip.durationSeconds) {
-                                        const propsAtBar = getInterpolatedProps(clip, tRel, activeExpandedMenu);
-                                        volMult = (propsAtBar.volume ?? 100) / 100;
-                                      }
-
-                                      const finalVal = val * volMult;
-                                      const x = i * spacing + spacing / 2;
-                                      const halfH = finalVal * 42; // Vertically symmetric waves scaling up to 42 units up & down in 100px viewBox
-                                      const y1 = 50 - halfH;
-                                      const y2 = 50 + halfH;
-                                      pathD += `M ${x} ${y1} L ${x} ${y2} `;
+                                    // Check volume at this slice of the audio duration
+                                    let volMult = constantVolMult;
+                                    if (hasVolumeKeyframes && clip.durationSeconds) {
+                                      const tRel = (i / (barCount - 1)) * clip.durationSeconds;
+                                      const propsAtBar = getInterpolatedProps(clip, tRel, activeExpandedMenu);
+                                      volMult = (propsAtBar.volume ?? 100) / 100;
                                     }
-
-                                    return (
-                                      <div className="absolute inset-0 w-full h-full">
-                                        {/* Axis Baseline */}
-                                        <svg className="absolute top-1/2 left-0 w-full h-[1px] pointer-events-none opacity-20">
-                                          <line x1="0" y1="0" x2="100%" y2="0" stroke="#d8b4fe" strokeWidth="0.8" strokeDasharray="3 3" />
-                                        </svg>
-                                        
-                                        <svg 
-                                          className="absolute inset-y-[2px] left-[4px] right-[4px] w-[calc(100%-8px)] h-[calc(100%-4px)] pointer-events-none opacity-[0.96]"
-                                          viewBox={`0 0 ${clipWidth} 100`}
-                                          preserveAspectRatio="none"
-                                        >
-                                          <defs>
-                                            <linearGradient id={`gradient-${clip.id}`} x1="0" y1="0" x2="0" y2="1">
-                                              <stop offset="0%" stopColor="#c084fc" stopOpacity="0.45" />
-                                              <stop offset="30%" stopColor="#e879f9" stopOpacity="0.85" />
-                                              <stop offset="50%" stopColor="#ffffff" stopOpacity="1" />
-                                              <stop offset="70%" stopColor="#e879f9" stopOpacity="0.85" />
-                                              <stop offset="100%" stopColor="#c084fc" stopOpacity="0.45" />
-                                            </linearGradient>
-                                          </defs>
-                                          <path
-                                            d={pathD}
-                                            stroke={`url(#gradient-${clip.id})`}
-                                            strokeWidth="2.0"
-                                            strokeLinecap="round"
-                                          />
-                                        </svg>
-                                      </div>
-                                    );
-                                  } else {
-                                    // Beautiful loading representation with dynamic organic pulse shimmer
-                                    for (let i = 0; i < barCount; i++) {
-                                      const h1 = Math.sin(i * 0.12);
-                                      const h2 = Math.cos(i * 0.22);
-                                      let val = 0.15 + 0.35 * Math.abs(h1) + 0.22 * Math.abs(h2);
-                                      val = Math.max(0.08, Math.min(0.85, val));
-
-                                      const x = i * spacing + spacing / 2;
-                                      const halfH = val * 35;
-                                      const y1 = 50 - halfH;
-                                      const y2 = 50 + halfH;
-                                      pathD += `M ${x} ${y1} L ${x} ${y2} `;
-                                    }
-
-                                    return (
-                                      <div className="absolute inset-0 w-full h-full overflow-hidden bg-violet-950/20">
-                                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-purple-500/15 to-transparent w-[200%] -translate-x-[50%] animate-shimmer pointer-events-none" />
-
-                                        <svg 
-                                          className="absolute inset-y-[2px] left-[4px] right-[4px] w-[calc(100%-8px)] h-[calc(100%-4px)] pointer-events-none opacity-[0.45] animate-pulse"
-                                          viewBox={`0 0 ${clipWidth} 100`}
-                                          preserveAspectRatio="none"
-                                        >
-                                          <path
-                                            d={pathD}
-                                            stroke="#d8b4fe"
-                                            strokeWidth="1.9"
-                                            strokeLinecap="round"
-                                          />
-                                        </svg>
-                                        
-                                        <div className="absolute inset-0 flex items-center justify-center p-2">
-                                          <span className="text-[8px] font-mono font-bold tracking-wider text-purple-300 bg-black/50 px-2 py-0.5 rounded border border-purple-500/30 backdrop-blur-xs flex items-center gap-1.5 shadow-lg select-none">
-                                            <svg className="animate-spin h-2.5 w-2.5 text-purple-400" viewBox="0 0 24 24" fill="none">
-                                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                            </svg>
-                                            Analyzing Waveform...
-                                          </span>
-                                        </div>
-                                      </div>
-                                    );
+                                    
+                                    const finalVal = val * volMult;
+                                    const x = i * 10 + 5;
+                                    const halfH = finalVal * 42; // Vertically symmetric waves scaling up to 42 units up & down
+                                    const y1 = 50 - halfH;
+                                    const y2 = 50 + halfH;
+                                    pathD += `M ${x} ${y1} L ${x} ${y2} `;
                                   }
+
+                                  return (
+                                    <svg 
+                                      className="absolute inset-y-[4px] left-[12px] right-[12px] w-[calc(100%-24px)] h-[calc(100%-8px)] pointer-events-none opacity-[0.88]"
+                                      viewBox={`0 0 ${barCount * 10} 100`}
+                                      preserveAspectRatio="none"
+                                    >
+                                      <path
+                                        d={pathD}
+                                        stroke="#a76ef2"
+                                        strokeWidth="3.2"
+                                        strokeLinecap="round"
+                                      />
+                                    </svg>
+                                  );
                                 })()}
 
                                 {/* Type indicator icon */}
@@ -4276,15 +3845,7 @@ export default function App() {
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${
-              activeExpandedMenu === "speed-curves"
-                ? "rounded-[24px] pt-1.5 pb-1 w-[320px]"
-                : activeExpandedMenu === "speed" && showSmoothOptions
-                ? "rounded-[24px] pt-2 pb-2 w-[280px]"
-                : activeExpandedMenu
-                ? "rounded-[24px] pt-1.5 pb-1 w-[220px]"
-                : "rounded-[24px] h-[50px] justify-center w-[220px]"
-            } shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[220px]" : "rounded-[24px] h-[50px] justify-center w-[220px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "volume" && (
@@ -4440,232 +4001,140 @@ export default function App() {
                         });
                       }
                     }}
-                    onClose={() => {
-                      setActiveExpandedMenu(null);
-                      setShowSmoothOptions(false);
-                    }}
+                    onClose={() => setActiveExpandedMenu(null)}
                   />
-                  {showSmoothOptions ? (
-                    <div className="flex flex-col w-full pb-1">
-                      <div className="flex justify-between items-center w-full mb-1">
-                        <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-wider">
-                          Smooth Slow-mo
-                        </span>
-                        <span className="text-[8px] bg-indigo-500/20 text-indigo-400 px-1 py-0.5 rounded font-mono font-bold">
-                          CapCut Mode
-                        </span>
-                      </div>
+                  <div className="flex gap-1.5 pb-2">
+                    <button
+                      onClick={async () => {
+                        const currentClip = clips.find(
+                          (c) => c.id === selectedClipId,
+                        );
+                        if (!currentClip || currentClip.type !== "video") return;
 
-                      {/* Options List */}
-                      <div className="flex flex-col gap-1 mb-2">
-                        {/* Option 1: Frame Blending */}
-                        <div
-                          onClick={() => setSmoothSlowMoMode("blend")}
-                          className={`flex items-center gap-2 p-1.5 rounded-lg border transition-all duration-150 cursor-pointer ${
-                            smoothSlowMoMode === "blend"
-                              ? "bg-indigo-500/10 border-indigo-500/50"
-                              : "bg-zinc-800/30 border-white/5 hover:bg-zinc-800/50"
-                          }`}
-                        >
-                          <div className={`w-3 h-3 rounded-full border flex items-center justify-center shrink-0 transition-all ${
-                            smoothSlowMoMode === "blend" ? "border-indigo-500 bg-indigo-500" : "border-zinc-500"
-                          }`}>
-                            {smoothSlowMoMode === "blend" && (
-                              <div className="w-1 bg-white rounded-full h-1" />
-                            )}
-                          </div>
-                          <div className="flex flex-col text-left">
-                            <span className="text-[9px] font-bold text-white leading-none mb-0.5">
-                              Frame Blending (Fast)
-                            </span>
-                            <span className="text-[7.5px] text-zinc-400 leading-tight">
-                              Dynamic cinematic blur. Blazing fast & stable.
-                            </span>
-                          </div>
-                        </div>
+                        const isOpticalFlowApplied =
+                          currentClip?.opticalFlow || false;
 
-                        {/* Option 2: Optical Flow */}
-                        <div
-                          onClick={() => setSmoothSlowMoMode("optical-flow")}
-                          className={`flex items-center gap-2 p-1.5 rounded-lg border transition-all duration-150 cursor-pointer ${
-                            smoothSlowMoMode === "optical-flow"
-                              ? "bg-indigo-500/10 border-indigo-500/50"
-                              : "bg-zinc-800/30 border-white/5 hover:bg-zinc-800/50"
-                          }`}
-                        >
-                          <div className={`w-3 h-3 rounded-full border flex items-center justify-center shrink-0 transition-all ${
-                            smoothSlowMoMode === "optical-flow" ? "border-indigo-500 bg-indigo-500" : "border-zinc-500"
-                          }`}>
-                            {smoothSlowMoMode === "optical-flow" && (
-                              <div className="w-1 bg-white rounded-full h-1" />
-                            )}
-                          </div>
-                          <div className="flex flex-col text-left">
-                            <span className="text-[9px] font-bold text-white leading-none mb-0.5">
-                              Optical Flow (Best)
-                            </span>
-                            <span className="text-[7.5px] text-zinc-400 leading-tight">
-                              AI vector synthesis. Slow render, maximum quality.
-                            </span>
-                          </div>
-                        </div>
-                      </div>
+                        if (isOpticalFlowApplied) {
+                          // Toggle off
+                          if (selectedClipId) {
+                            setClips((prev) =>
+                              prev.map((c) =>
+                                c.id === selectedClipId
+                                  ? { ...c, opticalFlow: false, src: c.originalSrc || c.src }
+                                  : c,
+                              ),
+                            );
+                          }
+                          return;
+                        }
 
-                      {/* Action columns */}
-                      <div className="flex gap-1.5 pb-1">
-                        <button
-                          onClick={() => setShowSmoothOptions(false)}
-                          className="flex-1 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-[9px] font-semibold transition-colors active:scale-95"
-                        >
-                          Back
-                        </button>
-                        <button
-                          onClick={async () => {
-                            const currentClip = clips.find((c) => c.id === selectedClipId);
-                            if (!currentClip || currentClip.type !== "video") return;
+                        if (smoothProcessingProgress !== null) return;
+                        setSmoothProcessingProgress(0);
 
-                            if (smoothProcessingProgress !== null) return;
-                            setSmoothProcessingProgress(0);
-
+                        try {
+                          setPillPopup({ message: "Applying Smooth Slow-mo...", progress: 0, type: 'loading' });
+                          
+                          let videoSource: string | Blob = currentClip.src;
+                          if (currentClip.fileId) {
                             try {
-                              setPillPopup({
-                                message: `Applying Smooth Slow-mo (${smoothSlowMoMode === 'blend' ? 'Blending' : 'AI'})...`,
-                                progress: 0,
-                                type: 'loading',
-                              });
-
-                              let videoSource: string | Blob = currentClip.src;
-                              if (currentClip.fileId) {
-                                try {
-                                  const { getFile } = await import("./lib/db");
-                                  const cachedBlob = await getFile(currentClip.fileId);
-                                  if (cachedBlob) {
-                                    videoSource = cachedBlob;
-                                  }
-                                } catch (dbErr) {
-                                  console.warn("Could not retrieve file from IndexedDB:", dbErr);
-                                }
+                              const { getFile } = await import("./lib/db");
+                              const cachedBlob = await getFile(currentClip.fileId);
+                              if (cachedBlob) {
+                                videoSource = cachedBlob;
                               }
-
-                              const newSrc = await processSmoothSlowMoBrowser(
-                                videoSource,
-                                currentClip.speed || 1,
-                                smoothSlowMoMode,
-                                (progress) => {
-                                  const pVal = Math.min(99, Math.round(progress));
-                                  setSmoothProcessingProgress(pVal);
-                                  setPillPopup({
-                                    message: `Applying Slow-mo (${smoothSlowMoMode === 'blend' ? 'Blending' : 'AI'})...`,
-                                    progress: pVal,
-                                    type: 'loading',
-                                  });
-                                }
-                              );
-
-                              setSmoothProcessingProgress(100);
-                              setPillPopup({
-                                message: `Smooth Slow-mo Applied (${smoothSlowMoMode === 'blend' ? 'Blending' : 'AI'})`,
-                                type: 'info',
-                              });
-
-                              if (selectedClipId) {
-                                setClips((prev) =>
-                                  prev.map((c) =>
-                                    c.id === selectedClipId
-                                      ? {
-                                          ...c,
-                                          opticalFlow: true,
-                                          smoothSlowMoMode,
-                                          originalSrc: c.originalSrc || c.src,
-                                          src: newSrc,
-                                        }
-                                      : c
-                                  )
-                                );
-                              }
-
-                              setTimeout(() => {
-                                setSmoothProcessingProgress(null);
-                                setPillPopup(null);
-                                setShowSmoothOptions(false);
-                              }, 2000);
-                            } catch (err) {
-                              console.error(err);
-                              setPillPopup({ message: "Failed to apply Slow-mo.", type: 'info' });
-                              setTimeout(() => {
-                                setPillPopup(null);
-                              }, 2000);
-                              setSmoothProcessingProgress(null);
+                            } catch (dbErr) {
+                              console.warn("Could not retrieve file from IndexedDB:", dbErr);
                             }
-                          }}
-                          disabled={smoothProcessingProgress !== null}
-                          className="flex-1 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-semibold transition-colors active:scale-95 flex items-center justify-center gap-1.5"
-                        >
-                          {smoothProcessingProgress !== null ? (
-                            <>
-                              <div className="relative w-2.5 h-2.5 flex items-center justify-center shrink-0">
-                                <svg className="w-full h-full -rotate-90" viewBox="0 0 16 16">
-                                  <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none" className="text-white/20" />
-                                  <circle
-                                    cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" fill="none"
-                                    className="text-white transition-all duration-150"
-                                    strokeDasharray="37.7"
-                                    strokeDashoffset={37.7 - (smoothProcessingProgress / 100) * 37.7}
-                                  />
-                                </svg>
-                              </div>
-                              <span>{Math.round(smoothProcessingProgress)}%</span>
-                            </>
-                          ) : (
-                            "Apply"
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex gap-1.5 pb-2">
-                      <button
-                        onClick={async () => {
-                          const currentClip = clips.find(
-                            (c) => c.id === selectedClipId,
-                          );
-                          if (!currentClip || currentClip.type !== "video") return;
-
-                          const isOpticalFlowApplied =
-                            currentClip?.opticalFlow || false;
-
-                          if (isOpticalFlowApplied) {
-                            // Toggle off
-                            if (selectedClipId) {
-                              setClips((prev) =>
-                                prev.map((c) =>
-                                  c.id === selectedClipId
-                                    ? { ...c, opticalFlow: false, src: c.originalSrc || c.src }
-                                    : c,
-                                ),
-                              );
-                            }
-                            return;
                           }
 
-                          setShowSmoothOptions(true);
-                        }}
-                        className={`flex-1 flex justify-center items-center gap-1 px-2 py-1 relative rounded-lg transition-colors active:scale-95 overflow-hidden ${clips.find((c) => c.id === selectedClipId)?.opticalFlow ? "bg-indigo-600 hover:bg-indigo-500" : "bg-zinc-800 hover:bg-zinc-700"}`}
-                      >
+                          const newSrc = await processSmoothSlowMoBrowser(
+                            videoSource,
+                            currentClip.speed || 1,
+                            (progress) => {
+                              const pVal = Math.min(99, Math.round(progress));
+                              setSmoothProcessingProgress(pVal);
+                              setPillPopup({ message: "Applying Smooth Slow-mo...", progress: pVal, type: 'loading' });
+                            }
+                          );
+
+                          setSmoothProcessingProgress(100);
+                          setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
+
+                          if (selectedClipId) {
+                            setClips((prev) =>
+                              prev.map((c) =>
+                                c.id === selectedClipId
+                                  ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrc }
+                                  : c,
+                              ),
+                            );
+                          }
+
+                          setTimeout(() => {
+                            setSmoothProcessingProgress(null);
+                            setPillPopup(null);
+                          }, 2000);
+                        } catch (err) {
+                          console.error(err);
+                          setPillPopup({ message: "Failed to apply Slow-mo.", type: 'info' });
+                          setTimeout(() => {
+                            setPillPopup(null);
+                          }, 2000);
+                          setSmoothProcessingProgress(null);
+                        }
+                      }}
+                      className={`flex-1 flex justify-center items-center gap-1 px-2 py-1 relative rounded-lg transition-colors active:scale-95 overflow-hidden ${clips.find((c) => c.id === selectedClipId)?.opticalFlow ? "bg-indigo-600 hover:bg-indigo-500" : "bg-zinc-800 hover:bg-zinc-700"}`}
+                    >
+                      {smoothProcessingProgress !== null ? (
+                        <>
+                          <div className="relative w-3 h-3 flex items-center justify-center shrink-0">
+                            <svg
+                              className="w-full h-full -rotate-90"
+                              viewBox="0 0 16 16"
+                            >
+                              <circle
+                                cx="8"
+                                cy="8"
+                                r="6"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                fill="none"
+                                className="text-zinc-600"
+                              />
+                              <circle
+                                cx="8"
+                                cy="8"
+                                r="6"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                fill="none"
+                                className="text-white transition-all duration-150 ease-linear"
+                                strokeDasharray="37.7"
+                                strokeDashoffset={
+                                  37.7 - (smoothProcessingProgress / 100) * 37.7
+                                }
+                              />
+                            </svg>
+                          </div>
+                          <span className="text-[9.5px] font-mono text-white whitespace-nowrap">
+                            {Math.round(smoothProcessingProgress)}%
+                          </span>
+                        </>
+                      ) : (
                         <span className="text-[9.5px] font-semibold text-white truncate">
-                          {clips.find((c) => c.id === selectedClipId)?.opticalFlow ? "Remove Smooth" : "Smooth"}
+                          Smooth
                         </span>
-                      </button>
-                      <button
-                        onClick={() => setActiveExpandedMenu("speed-curves")}
-                        className="flex-1 flex justify-center items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors active:scale-95"
-                      >
-                        <span className="text-[9.5px] font-semibold text-white">
-                          Curves
-                        </span>
-                      </button>
-                    </div>
-                  )}
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setActiveExpandedMenu("speed-curves")}
+                      className="flex-1 flex justify-center items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors active:scale-95"
+                    >
+                      <span className="text-[9.5px] font-semibold text-white">
+                        Curves
+                      </span>
+                    </button>
+                  </div>
                 </motion.div>
               )}
               {activeExpandedMenu === "speed-curves" && (
@@ -4694,94 +4163,6 @@ export default function App() {
                   }}
                   setToastMessage={setToastMessage}
                 />
-              )}
-              {activeExpandedMenu === "voiceover" && (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-4 flex flex-col gap-3 bg-zinc-900 border border-white/5 rounded-2xl w-[260px] max-w-full"
-                >
-                  <div className="flex justify-between items-center shrink-0">
-                    <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-widest">
-                      Voice Over
-                    </span>
-                    <button
-                      onClick={() => {
-                        if (isRecordingVoiceOver) stopVoiceOverRecording();
-                        setActiveExpandedMenu(null);
-                      }}
-                      className="text-zinc-400 hover:text-white hover:bg-white/5 p-1 rounded-full text-zinc-400 transition-colors"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-
-                  <div className="flex flex-col items-center gap-3 py-1">
-                    {/* Audio Level Visualizer & Duration */}
-                    <div className="flex items-center gap-4 w-full justify-between bg-zinc-800/40 rounded-xl px-4 py-3 border border-white/5">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Duration</span>
-                        <span className={`text-xl font-mono font-bold tracking-wide ${isRecordingVoiceOver ? "text-red-500" : "text-white"}`}>
-                          {formatTime(voiceOverDuration)}
-                        </span>
-                      </div>
-                      
-                      {/* Live Audio Waves */}
-                      <div className="flex items-center gap-0.5 h-8 px-2 bg-black/20 rounded-lg">
-                        {micAudioLevel.map((height, i) => (
-                          <motion.div
-                            key={i}
-                            animate={{ height }}
-                            transition={{ type: "spring", stiffness: 350, damping: 25 }}
-                            className={`w-[2.5px] rounded-full ${isRecordingVoiceOver ? "bg-red-500" : "bg-zinc-700"}`}
-                          />
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Controls */}
-                    <div className="flex flex-col gap-3.5 w-full">
-                      {/* Play Timeline Toggle */}
-                      <label className="flex items-center gap-2 cursor-pointer select-none group text-zinc-400 hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={voiceOverPlayTimelineWhileRecording}
-                          onChange={(e) => setVoiceOverPlayTimelineWhileRecording(e.target.checked)}
-                          disabled={isRecordingVoiceOver}
-                          className="sr-only"
-                        />
-                        <div className={`w-8 h-4 rounded-full p-0.5 transition-colors duration-200 ${voiceOverPlayTimelineWhileRecording ? "bg-indigo-600" : "bg-zinc-800"}`}>
-                          <div className={`w-3 h-3 rounded-full bg-white transition-transform duration-200 ${voiceOverPlayTimelineWhileRecording ? "translate-x-4" : "translate-x-0"}`} />
-                        </div>
-                        <span className="text-[10px] font-semibold tracking-tight transition-colors duration-200">
-                          Play preview during recording
-                        </span>
-                      </label>
-
-                      {/* Start/Stop Button */}
-                      {!isRecordingVoiceOver ? (
-                        <button
-                          onClick={startVoiceOverRecording}
-                          className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-all active:scale-95 shadow-[0_4px_12px_rgba(79,70,229,0.3)] hover:shadow-[0_4px_16px_rgba(79,70,229,0.4)]"
-                        >
-                          <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                          Record Voice Over
-                        </button>
-                      ) : (
-                        <button
-                          onClick={stopVoiceOverRecording}
-                          className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-500 transition-all active:scale-95 shadow-[0_4px_12px_rgba(220,38,38,0.3)] hover:shadow-[0_4px_16px_rgba(220,38,38,0.4)] animate-pulse"
-                        >
-                          <div className="w-2.5 h-2.5 bg-white rounded-sm" />
-                          Stop Recording
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
               )}
               {activeExpandedMenu === "stabilize" && selectedClipId && (
                 <motion.div
@@ -5212,9 +4593,6 @@ export default function App() {
                     );
                     case 'mask': return (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "mask" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "mask" ? null : "mask")}><SquareDashed size={16} /></motion.button>
-                    );
-                    case 'voiceover': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${activeExpandedMenu === "voiceover" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white"}`} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "voiceover" ? null : "voiceover")}><Mic size={16} /></motion.button>
                     );
                     default: return null;
                   }

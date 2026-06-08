@@ -1,0 +1,137 @@
+import React, { useRef, useEffect } from "react";
+import { Clip } from "../types";
+
+export function VideoRenderer({
+  id,
+  clip,
+  currentTime,
+  isPlaying,
+  isMuted,
+  style,
+  className,
+  onPointerDown,
+  onError,
+}: {
+  id?: string;
+  clip: Clip;
+  currentTime: number;
+  isPlaying: boolean;
+  isMuted: boolean;
+  style?: React.CSSProperties;
+  className?: string;
+  onPointerDown?: (e: React.PointerEvent) => void;
+  onError?: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
+    video.playbackRate = clip.speed || 1;
+
+    const targetTime =
+      (currentTime - clip.leftSeconds) * (clip.speed || 1) +
+      clip.trimStartSeconds;
+
+    if (!isPlaying) {
+      if (Math.abs(video.currentTime - targetTime) > 0.1) {
+        video.currentTime = targetTime;
+      }
+      if (!video.paused) video.pause();
+    } else {
+      if (Math.abs(video.currentTime - targetTime) > 0.5) {
+        video.currentTime = targetTime;
+      }
+      if (video.paused) {
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((e) => {
+            if (e.name !== "AbortError") console.error("Video play failed", e);
+          });
+        }
+      }
+    }
+  }, [
+    currentTime,
+    isPlaying,
+    clip.leftSeconds,
+    clip.trimStartSeconds,
+    clip.volume,
+    clip.speed,
+  ]);
+
+  return (
+    <video
+      id={id}
+      ref={videoRef}
+      src={clip.src}
+      className={className || "w-full h-full object-cover"}
+      muted={isMuted}
+      playsInline
+      style={style}
+      crossOrigin="anonymous"
+      onPointerDown={onPointerDown}
+      onError={onError}
+    />
+  );
+}
+
+export function AudioRenderer({
+  clip,
+  currentTime,
+  isPlaying,
+  isMuted,
+  onError,
+}: {
+  clip: Clip;
+  currentTime: number;
+  isPlaying: boolean;
+  isMuted: boolean;
+  onError?: () => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
+    audio.playbackRate = clip.speed || 1;
+
+    const targetTime =
+      (currentTime - clip.leftSeconds) * (clip.speed || 1) +
+      clip.trimStartSeconds;
+
+    if (!isPlaying) {
+      if (Math.abs(audio.currentTime - targetTime) > 0.1) {
+        audio.currentTime = targetTime;
+      }
+      if (!audio.paused) audio.pause();
+    } else {
+      if (Math.abs(audio.currentTime - targetTime) > 0.5) {
+        audio.currentTime = targetTime;
+      }
+      if (audio.paused) {
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((e) => {
+            if (e.name !== "AbortError") console.error("Audio play failed", e);
+          });
+        }
+      }
+    }
+  }, [
+    currentTime,
+    isPlaying,
+    clip.leftSeconds,
+    clip.trimStartSeconds,
+    clip.volume,
+    clip.speed,
+  ]);
+
+  return (
+    <audio ref={audioRef} src={clip.src} muted={isMuted} onError={onError} />
+  );
+}

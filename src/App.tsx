@@ -956,7 +956,7 @@ export default function App() {
         }
       }
 
-      const newSrc = await processSmoothSlowMoBrowser(
+      const { url: newSrcUrl, fileId: newFileId } = await processSmoothSlowMoBrowser(
         videoSource,
         currentClip.speed || 1,
         (progress) => {
@@ -970,7 +970,7 @@ export default function App() {
         setClips((prev) =>
           prev.map((c) =>
             c.id === selectedClipId
-              ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrc }
+              ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrcUrl, fileId: newFileId }
               : c,
           ),
         );
@@ -2751,7 +2751,7 @@ const renderEditor = () => (
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: "auto" }}
                 exit={{ opacity: 0, width: 0 }}
-                className="ml-2 overflow-hidden"
+                className="ml-0.5 overflow-hidden"
               >
                 <input
                   type="text"
@@ -2764,7 +2764,16 @@ const renderEditor = () => (
                     );
                   }}
                   placeholder="Enter text..."
-                  className="bg-zinc-800 border border-white/10 rounded-full px-4 py-1.5 text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-white/30 focus:bg-zinc-700 transition-all placeholder:text-zinc-500 shadow-inner w-[140px] sm:w-[180px]"
+                  className="bg-zinc-800 border border-white/10 rounded-full text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-white/30 focus:bg-zinc-700 transition-all placeholder:text-zinc-500 shadow-inner"
+                  style={{
+                    paddingLeft: "9px",
+                    marginTop: "1px",
+                    paddingTop: "5px",
+                    marginLeft: "0px",
+                    paddingRight: "16px",
+                    marginRight: "0px",
+                    width: "90px"
+                  }}
                 />
               </motion.div>
             )}
@@ -3866,7 +3875,7 @@ const renderEditor = () => (
                             }
                           }
 
-                          const newSrc = await processSmoothSlowMoBrowser(
+                          const { url: newSrcUrl, fileId: newFileId } = await processSmoothSlowMoBrowser(
                             videoSource,
                             currentClip.speed || 1,
                             (progress) => {
@@ -3883,7 +3892,7 @@ const renderEditor = () => (
                             setClips((prev) =>
                               prev.map((c) =>
                                 c.id === selectedClipId
-                                  ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrc }
+                                  ? { ...c, opticalFlow: true, originalSrc: c.originalSrc || c.src, src: newSrcUrl, fileId: newFileId }
                                   : c,
                               ),
                             );

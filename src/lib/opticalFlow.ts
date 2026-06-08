@@ -5,7 +5,7 @@ export async function processSmoothSlowMoBrowser(
   videoBlobUrlOrBlob: string | Blob,
   speedFactor: number,
   onProgress: (progress: number) => void
-): Promise<string> {
+): Promise<{ url: string; fileId: string }> {
   const ffmpeg = new FFmpeg();
   
   ffmpeg.on("progress", ({ progress }) => {
@@ -41,12 +41,9 @@ export async function processSmoothSlowMoBrowser(
     throw new Error(`Failed to load video file: ${typeof videoBlobUrlOrBlob}`);
   }
 
-  // Increase the frame rate by the inverse of speedFactor (e.g. 0.5 speed = 2x framerate = 60fps)
-  // We cap targetFps at 120 so the browser/WASM doesn't crash on extreme slow-mo.
-  const targetFps = Math.min(120, Math.round(30 / speedFactor));
-  
-  // Use mci (Motion Compensated Interpolation) for better slow motion using optical flow.
-  const filterString = `minterpolate=fps=${targetFps}:mi_mode=mci:mc_mode=obmc:me_mode=bidir:vsbmc=1`;
+  const ptsMultiplier = 1 / speedFactor;
+  // Make the video duration longer using setpts, then fill in missing frames to reach 30fps using MCI
+  const filterString = `setpts=${ptsMultiplier}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=obmc:me_mode=bidir:vsbmc=1`;
 
   await ffmpeg.exec([
     "-i",
@@ -64,6 +61,16 @@ export async function processSmoothSlowMoBrowser(
 
   const outputData = await ffmpeg.readFile(outputName);
   const outputBlob = new Blob([outputData], { type: "video/mp4" });
-  return URL.createObjectURL(outputBlob);
+  
+  const fileId = "F_smooth_" + Math.random().toString(36).substring(2, 9);
+  
+  try {
+    const { storeFile } = await import("./db");
+    await storeFile(fileId, outputBlob);
+  } catch (err) {
+    console.warn("Storage failed for smooth slow-mo", err);
+  }
+
+  return { url: URL.createObjectURL(outputBlob), fileId };
 }
 

@@ -29,11 +29,17 @@ export function VideoRenderer({
     if (!video) return;
 
     video.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
-    video.playbackRate = clip.speed || 1;
+    const effectiveSpeed = clip.opticalFlow ? 1 : (clip.speed || 1);
+    video.playbackRate = effectiveSpeed;
+
+    let effectiveTrimStart = clip.trimStartSeconds;
+    if (clip.opticalFlow && clip.speed) {
+      effectiveTrimStart = clip.trimStartSeconds / clip.speed;
+    }
 
     const targetTime =
-      (currentTime - clip.leftSeconds) * (clip.speed || 1) +
-      clip.trimStartSeconds;
+      (currentTime - clip.leftSeconds) * effectiveSpeed +
+      effectiveTrimStart;
 
     if (!isPlaying) {
       if (Math.abs(video.currentTime - targetTime) > 0.1) {
@@ -98,11 +104,17 @@ export function AudioRenderer({
     if (!audio) return;
 
     audio.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
-    audio.playbackRate = clip.speed || 1;
+    const effectiveSpeed = clip.opticalFlow ? 1 : (clip.speed || 1);
+    audio.playbackRate = effectiveSpeed;
+
+    let effectiveTrimStart = clip.trimStartSeconds;
+    if (clip.opticalFlow && clip.speed) {
+      effectiveTrimStart = clip.trimStartSeconds / clip.speed;
+    }
 
     const targetTime =
-      (currentTime - clip.leftSeconds) * (clip.speed || 1) +
-      clip.trimStartSeconds;
+      (currentTime - clip.leftSeconds) * effectiveSpeed +
+      effectiveTrimStart;
 
     if (!isPlaying) {
       if (Math.abs(audio.currentTime - targetTime) > 0.1) {

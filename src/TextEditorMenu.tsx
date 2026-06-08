@@ -12,6 +12,7 @@ export function TextEditorMenu({
   setToastMessage: (msg: string | null) => void;
 }) {
   const [activeTab, setActiveTab] = useState<'preset' | 'font' | 'style' | 'animation'>('style');
+  const [activeSubTab, setActiveSubTab] = useState<'text' | 'stroke' | 'glow' | 'spacing' | 'shadow'>('text');
   const [customFonts, setCustomFonts] = useState<{name: string, url: string}[]>([]);
   const fontInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,13 +65,21 @@ export function TextEditorMenu({
     { name: "Bold Block", color: "#ffffff", fontSize: 64, fontFamily: "Arial", textAnimation: "Fade In", bg: "bg-zinc-950 border-white/10" }
   ];
 
-  const presetColors = ["#ffffff", "#000000", "#ff2a85", "#3b82f6", "#eab308", "#10b981", "#ef4444", "#a855f7"];
+  const presetColors = ["#ffffff", "#d1d5db", "#9ca3af", "#4b5563", "#000000", "#eab308"];
 
   const tabs = [
-    { id: 'preset', icon: null, label: 'PRESET' },
-    { id: 'font', icon: null, label: 'FONT' },
-    { id: 'style', icon: null, label: 'STYLE' },
-    { id: 'animation', icon: null, label: 'ANIMATION' }
+    { id: 'preset', label: 'PRESET' },
+    { id: 'font', label: 'FONT' },
+    { id: 'style', label: 'STYLE' },
+    { id: 'animation', label: 'ANIMATION' }
+  ] as const;
+
+  const subTabs = [
+    { id: 'text', label: 'Text' },
+    { id: 'stroke', label: 'Stroke' },
+    { id: 'glow', label: 'Glow' },
+    { id: 'spacing', label: 'Spacing' },
+    { id: 'shadow', label: 'Shadow' }
   ] as const;
 
   return (
@@ -80,25 +89,25 @@ export function TextEditorMenu({
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95, y: 10 }}
       transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-      className="flex flex-col w-[220px] max-w-[100vw] h-[120px] p-2 gap-1.5 shrink-0 items-center overflow-hidden font-sans"
+      className="flex flex-col w-[217px] h-[140px] bg-transparent shadow-none p-3 pb-2 gap-2 overflow-visible font-sans border-none"
     >
       {/* Segmented Control Tabs */}
-      <div className="flex items-center w-full justify-between select-none p-0.5 relative shrink-0">
+      <div className="flex items-center w-full justify-between select-none px-1 relative shrink-0">
         {tabs.map((tab, index) => (
           <React.Fragment key={tab.id}>
             <button 
               onClick={() => setActiveTab(tab.id)} 
-              className={`flex items-center gap-0.5 justify-center py-1 transition-colors outline-none flex-1 text-[8px] tracking-tight font-semibold uppercase ${activeTab === tab.id ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`flex items-center justify-center py-0.5 transition-colors outline-none text-[8px] tracking-widest font-bold uppercase ${activeTab === tab.id ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               {tab.label}
             </button>
-            {index < tabs.length - 1 && <div className="w-[1px] h-3 bg-white/10" />}
+            {index < tabs.length - 1 && <div className="w-[1px] h-2.5 bg-white/10" />}
           </React.Fragment>
         ))}
       </div>
 
       {/* Tab Content Container */}
-      <div className="w-full flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide py-0.5">
+      <div className="w-full flex-1 overflow-visible">
         <AnimatePresence mode="wait">
           {activeTab === 'preset' && (
             <motion.div
@@ -107,32 +116,32 @@ export function TextEditorMenu({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.2 }}
-              className="grid grid-cols-3 gap-1"
+              className="grid grid-cols-3 gap-1 h-full px-1 scrollbar-hide overflow-y-auto"
             >
-              {presets.map(p => {
+              {presets.map((p, i) => {
                 const isSelected = clip?.color === p.color && clip?.fontSize === p.fontSize && clip?.fontFamily === p.fontFamily && clip?.textAnimation === p.textAnimation;
                 return (
                   <button
-                    key={p.name}
+                    key={`${p.name}-${i}`}
                     onClick={() => updateClip({
                       color: p.color,
                       fontSize: p.fontSize,
                       fontFamily: p.fontFamily,
                       textAnimation: p.textAnimation
                     })}
-                    className={`relative flex flex-col items-center justify-center p-1 rounded-sm border overflow-hidden transition-all duration-300 ${p.bg} ${
+                    className={`relative flex flex-col items-center justify-center p-1 rounded-xl border overflow-hidden transition-all h-[44px] ${p.bg} ${
                       isSelected 
-                        ? 'ring-1 ring-indigo-500 border-white/20' 
-                        : 'border-white/5 opacity-80 hover:opacity-100 hover:scale-[1.02]'
+                        ? 'ring-1 ring-indigo-500 border-transparent mask-squircle' 
+                        : 'border-white/5 opacity-80 hover:opacity-100'
                     }`}
                   >
                     <span 
-                      className="text-[10px] w-full text-center leading-none mb-0.5 drop-shadow-md"
+                      className="text-sm w-full text-center leading-none mb-0.5 drop-shadow-md"
                       style={{ color: p.color, fontFamily: p.fontFamily }}
                     >
                       Aa
                     </span>
-                    <span className="text-[6px] font-medium text-zinc-400 uppercase tracking-tighter truncate w-full">{p.name}</span>
+                    <span className="text-[6px] font-medium text-white/70 uppercase tracking-tighter truncate w-full">{p.name}</span>
                   </button>
                 );
               })}
@@ -146,14 +155,14 @@ export function TextEditorMenu({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.2 }}
-              className="flex flex-col h-full"
+              className="flex flex-col h-full overflow-y-auto px-1 scrollbar-hide"
             >
-              <div className="grid grid-cols-3 gap-0.5 auto-rows-min">
+              <div className="grid grid-cols-2 gap-1 auto-rows-min">
                 <button
                   onClick={() => fontInputRef.current?.click()}
-                  className="flex flex-col items-center justify-center p-1 text-[8px] font-semibold hover:bg-white/5 rounded-sm transition-all text-white"
+                  className="flex items-center gap-1.5 px-2 py-1.5 text-[9px] font-medium bg-white/5 hover:bg-white/10 rounded-lg transition-all text-white border border-white/5"
                 >
-                  <Plus size={10} className="mb-0.5" /> Add
+                  <Plus size={10} className="text-zinc-400" /> Custom Font
                 </button>
                 <input
                   type="file"
@@ -169,10 +178,10 @@ export function TextEditorMenu({
                     <button
                       key={f}
                       onClick={() => updateClip({ fontFamily: f })}
-                      className={`flex items-center justify-center py-1 px-0.5 rounded-sm transition-all outline-none ${isSelected ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                      className={`flex items-center px-2 py-1.5 rounded-lg transition-all outline-none border ${isSelected ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-zinc-400 hover:text-white hover:bg-white/5'}`}
                     >
-                      <span className={`text-[8px] truncate w-full text-center ${isSelected ? 'font-bold' : ''}`} style={{ fontFamily: f }}>
-                        {f}
+                      <span className={`text-[9px] truncate w-full text-left ${isSelected ? 'font-bold' : ''}`} style={{ fontFamily: f }}>
+                         {f}
                       </span>
                     </button>
                   );
@@ -188,47 +197,121 @@ export function TextEditorMenu({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.2 }}
-              className="flex flex-col gap-2 px-1 py-0.5"
+              className="flex flex-col h-full px-1 w-[190px]"
             >
-              {/* Color Selection Section */}
-              <div className="flex flex-col gap-1">
-                <div className="flex flex-wrap gap-1">
-                  {presetColors.map(color => (
-                    <button
-                      key={color}
-                      onClick={() => updateClip({ color })}
-                      className={`w-4 h-4 rounded-full transition-transform outline-none ${clip?.color === color ? 'scale-125 ring-1 ring-white' : 'hover:scale-110'}`}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
+              <div className="flex gap-2 items-center flex-1">
+                {/* Left Side Controls */}
+                <div className="flex flex-col gap-2 w-[120px] justify-center">
                   
-                  <div className="relative w-4 h-4 rounded-full overflow-hidden shrink-0 flex items-center justify-center">
-                    <div className="absolute inset-0 bg-gradient-to-tr from-rose-500 via-emerald-500 to-indigo-500 pointer-events-none rounded-full" />
-                    <Plus size={8} className="text-white relative z-10 pointer-events-none drop-shadow-md" />
+                  {/* Recent Colors */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Recent</span>
+                    <div className="flex gap-[3px] items-center">
+                      <button
+                        onClick={() => updateClip({ color: '#ffffff' })}
+                        className={`w-3.5 h-3.5 rounded-full transition-transform outline-none bg-white ${clip?.color === '#ffffff' ? 'scale-110 ring-1 ring-white/50 ring-offset-1 ring-offset-[#1E1E1E]' : 'hover:scale-110'}`}
+                      />
+                      {presetColors.slice(1).map((color, i) => (
+                        <button
+                          key={i}
+                          onClick={() => updateClip({ color })}
+                          className={`w-3.5 h-3.5 rounded-full transition-transform outline-none ${clip?.color === color ? 'scale-110 ring-1 ring-white/50 ring-offset-1 ring-offset-[#1E1E1E]' : 'hover:scale-110'}`}
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                      <div className="w-[14px] h-[14px] rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:bg-white/10">
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400">
+                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Size Slider */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Size</span>
+                    <div className="flex-1 right-0 flex items-center group relative h-3">
+                      <input 
+                        type="range" 
+                        min="12" max="150" step="1"
+                        value={clip?.fontSize || 48}
+                        onChange={(e) => updateClip({ fontSize: parseInt(e.target.value) })}
+                        className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                      />
+                      <div className="w-full h-1 bg-zinc-700/50 rounded-full overflow-hidden pointer-events-none">
+                         <div 
+                           className="h-full bg-[#1bc5bd]" 
+                           style={{ width: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / (150 - 12) * 100))}%` }}
+                         />
+                      </div>
+                      <div 
+                         className="absolute h-2 w-2 bg-white rounded-full shadow pointer-events-none -ml-1 transition-transform group-hover:scale-110"
+                         style={{ left: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / (150 - 12) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Opacity Slider */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Opacity</span>
+                    <div className="flex-1 flex items-center group relative h-3">
+                      <input 
+                         type="range" 
+                         min="0" max="100" step="1"
+                         value={(clip?.opacity ?? 1) * 100}
+                         onChange={(e) => updateClip({ opacity: parseInt(e.target.value) / 100 })}
+                         className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                      />
+                      <div className="w-full h-1 bg-zinc-700/50 rounded-full overflow-hidden pointer-events-none">
+                         <div 
+                           className="h-full bg-[#1bc5bd]" 
+                           style={{ width: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
+                         />
+                      </div>
+                      <div 
+                         className="absolute h-2 w-2 bg-white rounded-full shadow pointer-events-none -ml-1 transition-transform group-hover:scale-110"
+                         style={{ left: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Color Wheel */}
+                <div 
+                  className="flex flex-col items-center justify-center shrink-0 w-[50px] h-[50px] group relative"
+                  style={{ paddingTop: '0px', paddingLeft: '0px', marginTop: '-1px', marginLeft: '-5px' }}
+                >
+                  <div className="relative w-[48px] h-[48px] rounded-full overflow-hidden border-0 shrink-0 cursor-pointer group-hover:scale-105 transition-transform">
+                    {/* The classic Color Wheel gradient background */}
+                    <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_90deg,red,yellow,lime,cyan,blue,magenta,red)]" />
+                    <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,white_0%,transparent_70%)] pointer-events-none" />
+                    
                     <input
                       type="color"
                       value={clip?.color || "#ffffff"}
                       onChange={(e) => updateClip({ color: e.target.value })}
-                      className="absolute w-full h-full p-0 border-none bg-transparent cursor-pointer opacity-0"
-                      title="Custom Color"
+                      className="absolute w-full h-[200%] -top-[50%] p-0 border-none bg-transparent cursor-pointer opacity-0"
+                      style={{ paddingTop: '0px', paddingLeft: '0px', paddingRight: '0px', paddingBottom: '-5px', marginBottom: '0px', marginRight: '0px', width: '0px' }}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Size Selection Section */}
-              <div className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-1">
-                   <span className="text-[8px] font-bold text-zinc-600">A</span>
-                   <input 
-                     type="range" 
-                     min="12" max="150" step="1"
-                     value={clip?.fontSize || 48}
-                     onChange={(e) => updateClip({ fontSize: parseInt(e.target.value) })}
-                     className="flex-1 accent-white h-0.5 bg-black/40 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full"
-                   />
-                   <span className="text-[10px] font-bold text-zinc-400">A</span>
-                </div>
+              {/* Sub-tabs for properties - Text Stroke Glow Spacing Shadow */}
+              <div className="flex items-center justify-center gap-[2px] mt-2 mb-1">
+                 {subTabs.map(tab => (
+                   <button
+                     key={tab.id}
+                     onClick={() => setActiveSubTab(tab.id)}
+                     className={`px-2 py-[3px] rounded-full text-[8px] font-medium transition-colors ${
+                       activeSubTab === tab.id 
+                         ? 'bg-zinc-700/80 text-white shadow-sm font-semibold' 
+                         : 'text-zinc-500 hover:text-white hover:bg-white/5'
+                     }`}
+                   >
+                     {tab.label}
+                   </button>
+                 ))}
               </div>
             </motion.div>
           )}
@@ -240,7 +323,7 @@ export function TextEditorMenu({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.2 }}
-              className="grid grid-cols-2 gap-x-1 gap-y-0.5 align-top pt-0.5"
+              className="grid grid-cols-2 gap-1 h-full px-1 overflow-y-auto scrollbar-hide"
             >
               {animations.map(a => {
                 const isSelected = clip?.textAnimation === a || (!clip?.textAnimation && a === "None");
@@ -248,9 +331,9 @@ export function TextEditorMenu({
                   <button
                     key={a}
                     onClick={() => updateClip({ textAnimation: a })}
-                    className={`flex items-center justify-center py-1 px-0.5 rounded-sm transition-all outline-none ${isSelected ? 'text-white font-bold' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={`flex items-center justify-center py-2 px-1 rounded-lg transition-all outline-none border ${isSelected ? 'bg-white/10 border-white/20 text-white shadow-inner' : 'border-white/5 bg-[#18181A] text-zinc-400 hover:text-white hover:bg-white/5'}`}
                   >
-                    <span className="text-[8px] uppercase">{a}</span>
+                    <span className="text-[9px] font-medium">{a}</span>
                   </button>
                 );
               })}

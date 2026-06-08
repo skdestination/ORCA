@@ -7,7 +7,9 @@ workflows:
       java: 17
     scripts:
       - name: Install NPM dependencies
-        script: npm install
+        script: |
+          rm -rf package-lock.json node_modules
+          npm install
       - name: Install Capacitor Android package
         script: npm install @capacitor/android@5
       - name: Build React App

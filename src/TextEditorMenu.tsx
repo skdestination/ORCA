@@ -89,21 +89,26 @@ export function TextEditorMenu({
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95, y: 10 }}
       transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-      className="flex flex-col w-[217px] h-[140px] bg-transparent shadow-none p-3 pb-2 gap-2 overflow-visible font-sans border-none"
+      className="flex flex-col w-[217px] h-[140px] bg-transparent shadow-none p-2.5 pb-1.5 gap-2 overflow-visible font-sans border-none select-none"
     >
-      {/* Segmented Control Tabs */}
-      <div className="flex items-center w-full justify-between select-none px-1 relative shrink-0">
-        {tabs.map((tab, index) => (
-          <React.Fragment key={tab.id}>
+      {/* Premium Segmented Control Tab Header */}
+      <div className="flex items-center w-full bg-zinc-950/20 p-[2px] rounded-lg border border-white/[0.04] select-none relative shrink-0 h-[22px]">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
             <button 
+              key={tab.id}
               onClick={() => setActiveTab(tab.id)} 
-              className={`flex items-center justify-center py-0.5 transition-colors outline-none text-[8px] tracking-widest font-bold uppercase ${activeTab === tab.id ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`relative flex-1 flex items-center justify-center py-0.5 rounded-md transition-all duration-150 outline-none text-[7.5px] tracking-[0.14em] font-medium uppercase ${
+                isActive 
+                  ? 'bg-zinc-800 text-white shadow-[0_1px_4px_rgba(0,0,0,0.4)] border border-white/[0.04]' 
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
             >
-              {tab.label}
+              <span className="relative z-10">{tab.label}</span>
             </button>
-            {index < tabs.length - 1 && <div className="w-[1px] h-2.5 bg-white/10" />}
-          </React.Fragment>
-        ))}
+          )
+        })}
       </div>
 
       {/* Tab Content Container */}
@@ -112,11 +117,11 @@ export function TextEditorMenu({
           {activeTab === 'preset' && (
             <motion.div
               key="presets"
-              initial={{ opacity: 0, x: -10 }}
+              initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10 }}
-              transition={{ duration: 0.2 }}
-              className="grid grid-cols-3 gap-1 h-full px-1 scrollbar-hide overflow-y-auto"
+              exit={{ opacity: 0, x: 6 }}
+              transition={{ duration: 0.15 }}
+              className="grid grid-cols-3 gap-1 h-full px-0.5 scrollbar-hide overflow-y-auto"
             >
               {presets.map((p, i) => {
                 const isSelected = clip?.color === p.color && clip?.fontSize === p.fontSize && clip?.fontFamily === p.fontFamily && clip?.textAnimation === p.textAnimation;
@@ -129,19 +134,23 @@ export function TextEditorMenu({
                       fontFamily: p.fontFamily,
                       textAnimation: p.textAnimation
                     })}
-                    className={`relative flex flex-col items-center justify-center p-1 rounded-xl border overflow-hidden transition-all h-[44px] ${p.bg} ${
+                    className={`relative flex flex-col items-center justify-center p-1 rounded-lg border overflow-hidden transition-all h-[42px] bg-zinc-950/30 ${
                       isSelected 
-                        ? 'ring-1 ring-indigo-500 border-transparent mask-squircle' 
-                        : 'border-white/5 opacity-80 hover:opacity-100'
+                        ? 'border-white/50 bg-zinc-900/60 shadow-[0_2px_8px_rgba(0,0,0,0.5)] scale-[1.02]' 
+                        : 'border-white/[0.03] hover:border-white/[0.08] hover:bg-zinc-900/20'
                     }`}
                   >
                     <span 
-                      className="text-sm w-full text-center leading-none mb-0.5 drop-shadow-md"
+                      className="text-xs w-full text-center leading-none mb-0.5 drop-shadow-md"
                       style={{ color: p.color, fontFamily: p.fontFamily }}
                     >
                       Aa
                     </span>
-                    <span className="text-[6px] font-medium text-white/70 uppercase tracking-tighter truncate w-full">{p.name}</span>
+                    <span className="text-[5.5px] font-semibold text-zinc-400 uppercase tracking-[0.12em] truncate w-full">{p.name}</span>
+                    
+                    {isSelected && (
+                      <div className="absolute top-0.5 right-0.5 w-[3px] h-[3px] rounded-full bg-white shadow-sm" />
+                    )}
                   </button>
                 );
               })}
@@ -151,18 +160,18 @@ export function TextEditorMenu({
           {activeTab === 'font' && (
             <motion.div
               key="fonts"
-              initial={{ opacity: 0, x: -10 }}
+              initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10 }}
-              transition={{ duration: 0.2 }}
-              className="flex flex-col h-full overflow-y-auto px-1 scrollbar-hide"
+              exit={{ opacity: 0, x: 6 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col h-full overflow-y-auto px-0.5 scrollbar-hide"
             >
               <div className="grid grid-cols-2 gap-1 auto-rows-min">
                 <button
                   onClick={() => fontInputRef.current?.click()}
-                  className="flex items-center gap-1.5 px-2 py-1.5 text-[9px] font-medium bg-white/5 hover:bg-white/10 rounded-lg transition-all text-white border border-white/5"
+                  className="flex items-center justify-center gap-1.5 px-2 py-1 text-[7.5px] uppercase tracking-wider font-semibold bg-zinc-950/15 border border-dashed border-white/[0.08] hover:border-white/[0.15] hover:bg-zinc-950/30 rounded-md transition-all text-zinc-300"
                 >
-                  <Plus size={10} className="text-zinc-400" /> Custom Font
+                  <Plus size={8} className="text-zinc-400" /> Custom
                 </button>
                 <input
                   type="file"
@@ -178,9 +187,13 @@ export function TextEditorMenu({
                     <button
                       key={f}
                       onClick={() => updateClip({ fontFamily: f })}
-                      className={`flex items-center px-2 py-1.5 rounded-lg transition-all outline-none border ${isSelected ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-zinc-400 hover:text-white hover:bg-white/5'}`}
+                      className={`flex items-center px-1.5 py-1 rounded-md transition-all outline-none border text-left ${
+                        isSelected 
+                          ? 'bg-zinc-800 border-white/[0.08] text-white shadow-sm' 
+                          : 'border-transparent bg-zinc-950/10 text-zinc-400 hover:text-white hover:bg-zinc-900/20'
+                      }`}
                     >
-                      <span className={`text-[9px] truncate w-full text-left ${isSelected ? 'font-bold' : ''}`} style={{ fontFamily: f }}>
+                      <span className="text-[7.5px] truncate w-full tracking-[0.04em]" style={{ fontFamily: f }}>
                          {f}
                       </span>
                     </button>
@@ -193,125 +206,402 @@ export function TextEditorMenu({
           {activeTab === 'style' && (
             <motion.div
               key="style"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10 }}
-              transition={{ duration: 0.2 }}
-              className="flex flex-col h-full px-1 w-[190px]"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col h-full w-full"
             >
-              <div className="flex gap-2 items-center flex-1">
-                {/* Left Side Controls */}
-                <div className="flex flex-col gap-2 w-[120px] justify-center">
-                  
-                  {/* Recent Colors */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Recent</span>
-                    <div className="flex gap-[3px] items-center">
-                      <button
-                        onClick={() => updateClip({ color: '#ffffff' })}
-                        className={`w-3.5 h-3.5 rounded-full transition-transform outline-none bg-white ${clip?.color === '#ffffff' ? 'scale-110 ring-1 ring-white/50 ring-offset-1 ring-offset-[#1E1E1E]' : 'hover:scale-110'}`}
-                      />
-                      {presetColors.slice(1).map((color, i) => (
-                        <button
-                          key={i}
-                          onClick={() => updateClip({ color })}
-                          className={`w-3.5 h-3.5 rounded-full transition-transform outline-none ${clip?.color === color ? 'scale-110 ring-1 ring-white/50 ring-offset-1 ring-offset-[#1E1E1E]' : 'hover:scale-110'}`}
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
-                      <div className="w-[14px] h-[14px] rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:bg-white/10">
-                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400">
-                          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
-                        </svg>
+              <div className="flex gap-2 items-center flex-1 h-[68px]">
+                {/* Left Side Controls (Changes based on activeSubTab!) */}
+                <div className="flex flex-col gap-1.5 w-[130px] justify-center shrink-0">
+                  {activeSubTab === 'text' && (
+                    <>
+                      {/* Recent Colors */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Palette</span>
+                        </div>
+                        <div className="flex gap-1.5 items-center px-0.5">
+                          <button
+                            onClick={() => updateClip({ color: '#ffffff' })}
+                            className={`w-3 h-3 rounded-full transition-all outline-none bg-white border border-black/30 relative flex items-center justify-center ${
+                              clip?.color === '#ffffff' 
+                                ? 'ring-1 ring-white/50 scale-105' 
+                                : 'hover:scale-105'
+                            }`}
+                          >
+                            {clip?.color === '#ffffff' && (
+                              <Check size={8} className="text-zinc-950 shrink-0 font-bold" strokeWidth={3} />
+                            )}
+                          </button>
+                          {presetColors.slice(1).map((color, i) => {
+                            const isChosen = clip?.color === color;
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => updateClip({ color })}
+                                className="w-3 h-3 rounded-full transition-all outline-none border border-black/30 relative flex items-center justify-center hover:scale-105"
+                                style={{ backgroundColor: color }}
+                              >
+                                {isChosen && (
+                                  <Check size={8} className="text-zinc-950 bg-white/70 rounded-full p-[0.5px] scale-90 font-bold shrink-0" strokeWidth={3} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Size Slider */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Size</span>
-                    <div className="flex-1 right-0 flex items-center group relative h-3">
-                      <input 
-                        type="range" 
-                        min="12" max="150" step="1"
-                        value={clip?.fontSize || 48}
-                        onChange={(e) => updateClip({ fontSize: parseInt(e.target.value) })}
-                        className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
-                      />
-                      <div className="w-full h-1 bg-zinc-700/50 rounded-full overflow-hidden pointer-events-none">
-                         <div 
-                           className="h-full bg-[#1bc5bd]" 
-                           style={{ width: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / (150 - 12) * 100))}%` }}
-                         />
+                      {/* Size Slider */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Size</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.fontSize || 48}px</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="12" max="150" step="1"
+                            value={clip?.fontSize || 48}
+                            onChange={(e) => updateClip({ fontSize: parseInt(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / 138 * 100))}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / 138 * 100))}%` }}
+                          />
+                        </div>
                       </div>
-                      <div 
-                         className="absolute h-2 w-2 bg-white rounded-full shadow pointer-events-none -ml-1 transition-transform group-hover:scale-110"
-                         style={{ left: `${Math.max(0, Math.min(100, ((clip?.fontSize || 48) - 12) / (150 - 12) * 100))}%` }}
-                      />
-                    </div>
-                  </div>
 
-                  {/* Opacity Slider */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[8px] text-zinc-400 w-7 shrink-0 text-left">Opacity</span>
-                    <div className="flex-1 flex items-center group relative h-3">
-                      <input 
-                         type="range" 
-                         min="0" max="100" step="1"
-                         value={(clip?.opacity ?? 1) * 100}
-                         onChange={(e) => updateClip({ opacity: parseInt(e.target.value) / 100 })}
-                         className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
-                      />
-                      <div className="w-full h-1 bg-zinc-700/50 rounded-full overflow-hidden pointer-events-none">
-                         <div 
-                           className="h-full bg-[#1bc5bd]" 
-                           style={{ width: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
-                         />
+                      {/* Opacity Slider */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Opacity</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{Math.round((clip?.opacity ?? 1) * 100)}%</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="0" max="100" step="1"
+                            value={Math.round((clip?.opacity ?? 1) * 100)}
+                            onChange={(e) => updateClip({ opacity: parseInt(e.target.value) / 100 })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
+                          />
+                        </div>
                       </div>
-                      <div 
-                         className="absolute h-2 w-2 bg-white rounded-full shadow pointer-events-none -ml-1 transition-transform group-hover:scale-110"
-                         style={{ left: `${Math.max(0, Math.min(100, (clip?.opacity ?? 1) * 100))}%` }}
-                      />
-                    </div>
-                  </div>
+                    </>
+                  )}
+
+                  {activeSubTab === 'stroke' && (
+                    <>
+                      {/* Stroke Presets Row */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Stroke Color</span>
+                        </div>
+                        <div className="flex gap-1.5 items-center px-0.5">
+                          {["#000000", "#ffffff", "#ef4444", "#f59e0b", "#3b82f6", "#10b981"].map((color, i) => {
+                            const isChosen = clip?.strokeColor === color;
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => updateClip({ strokeColor: color, strokeWidth: clip?.strokeWidth || 1.5 })}
+                                className="w-3 h-3 rounded-full transition-all outline-none border border-black/30 relative flex items-center justify-center hover:scale-105"
+                                style={{ backgroundColor: color }}
+                              >
+                                {isChosen && (
+                                  <Check size={8} className="text-zinc-950 bg-white/70 rounded-full p-[0.5px] scale-90 font-bold shrink-0" strokeWidth={3} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Stroke Width Slider */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Stroke Width</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.strokeWidth || 0}px</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="0" max="12" step="0.5"
+                            value={clip?.strokeWidth || 0}
+                            onChange={(e) => updateClip({ strokeWidth: parseFloat(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${((clip?.strokeWidth || 0) / 12) * 100}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${((clip?.strokeWidth || 0) / 12) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeSubTab === 'glow' && (
+                    <>
+                      {/* Glow Presets Row */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Glow Color</span>
+                        </div>
+                        <div className="flex gap-1.5 items-center px-0.5">
+                          {["#ffffff", "#ffd700", "#ff007f", "#00ffff", "#8b5cf6", "#10b981"].map((color, i) => {
+                            const isChosen = clip?.glowColor === color;
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => updateClip({ glowColor: color, glowRadius: clip?.glowRadius || 8 })}
+                                className="w-3 h-3 rounded-full transition-all outline-none border border-black/30 relative flex items-center justify-center hover:scale-105"
+                                style={{ backgroundColor: color }}
+                              >
+                                {isChosen && (
+                                  <Check size={8} className="text-zinc-950 bg-white/70 rounded-full p-[0.5px] scale-90 font-bold shrink-0" strokeWidth={3} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Glow Radius Slider */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Glow Radius</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.glowRadius || 0}px</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="0" max="40" step="1"
+                            value={clip?.glowRadius || 0}
+                            onChange={(e) => updateClip({ glowRadius: parseInt(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${((clip?.glowRadius || 0) / 40) * 100}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${((clip?.glowRadius || 0) / 40) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeSubTab === 'spacing' && (
+                    <>
+                      {/* Letter Spacing */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Letter Spacing</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.letterSpacing || 0}px</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="-5" max="25" step="0.5"
+                            value={clip?.letterSpacing || 0}
+                            onChange={(e) => updateClip({ letterSpacing: parseFloat(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${((parseFloat(clip?.letterSpacing || 0) + 5) / 30) * 100}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${((parseFloat(clip?.letterSpacing || 0) + 5) / 30) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Line Height */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Line Height</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.lineHeight || 1.25}x</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="0.8" max="2.5" step="0.05"
+                            value={clip?.lineHeight || 1.25}
+                            onChange={(e) => updateClip({ lineHeight: parseFloat(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${((parseFloat(clip?.lineHeight || 1.25) - 0.8) / 1.7) * 100}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${((parseFloat(clip?.lineHeight || 1.25) - 0.8) / 1.7) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeSubTab === 'shadow' && (
+                    <>
+                      {/* Shadow Presets Row */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Shadow Color</span>
+                        </div>
+                        <div className="flex gap-1.5 items-center px-0.5">
+                          {["#000000", "#ffffff", "rgba(0,0,0,0.5)", "rgba(99,102,241,0.5)"].map((color, i) => {
+                            const isChosen = clip?.shadowColor === color;
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => updateClip({ shadowColor: color, shadowBlur: clip?.shadowBlur || 5, shadowOffsetX: clip?.shadowOffsetX || 3, shadowOffsetY: clip?.shadowOffsetY || 3 })}
+                                className="w-3 h-3 rounded-full transition-all outline-none border border-black/30 relative flex items-center justify-center hover:scale-105"
+                                style={{ backgroundColor: color }}
+                              >
+                                {isChosen && (
+                                  <Check size={8} className="text-zinc-950 bg-white/70 rounded-full p-[0.5px] scale-90 font-bold shrink-0" strokeWidth={3} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Blur Slider */}
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-center px-0.5">
+                          <span className="text-[6.5px] font-bold text-zinc-500 uppercase tracking-[0.16em] leading-none">Blur</span>
+                          <span className="text-[6.5px] font-mono text-zinc-400 font-bold leading-none">{clip?.shadowBlur || 0}px</span>
+                        </div>
+                        <div className="flex items-center group relative h-2.5">
+                          <input 
+                            type="range" 
+                            min="0" max="25" step="1"
+                            value={clip?.shadowBlur || 0}
+                            onChange={(e) => updateClip({ shadowBlur: parseInt(e.target.value) })}
+                            className="w-full absolute inset-0 z-10 opacity-0 cursor-pointer"
+                          />
+                          <div className="w-full h-[2px] bg-zinc-950 rounded-full overflow-hidden pointer-events-none border border-white/[0.02]">
+                             <div 
+                               className="h-full bg-white/90" 
+                               style={{ width: `${((clip?.shadowBlur || 0) / 25) * 100}%` }}
+                             />
+                          </div>
+                          <div 
+                             className="absolute h-1.5 w-1.5 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.6)] pointer-events-none -ml-[3px] border border-zinc-950 transition-transform group-hover:scale-110"
+                             style={{ left: `${((clip?.shadowBlur || 0) / 25) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Color Wheel */}
+                {/* Color Wheel with Polished Ring Bezel */}
                 <div 
-                  className="flex flex-col items-center justify-center shrink-0 w-[50px] h-[50px] group relative"
-                  style={{ paddingTop: '0px', paddingLeft: '0px', marginTop: '-1px', marginLeft: '-5px' }}
+                  className="flex flex-col items-center justify-center shrink-0 w-[48px] h-[48px] m-auto relative"
                 >
-                  <div className="relative w-[48px] h-[48px] rounded-full overflow-hidden border-0 shrink-0 cursor-pointer group-hover:scale-105 transition-transform">
-                    {/* The classic Color Wheel gradient background */}
-                    <div className="absolute inset-0 rounded-full bg-[conic-gradient(from_90deg,red,yellow,lime,cyan,blue,magenta,red)]" />
-                    <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,white_0%,transparent_70%)] pointer-events-none" />
+                  <div className="relative w-[44px] h-[44px] rounded-full overflow-hidden ring-1 ring-white/[0.08] shadow-[0_4px_12px_rgba(0,0,0,0.5)] bg-zinc-950/40 shrink-0 cursor-pointer hover:scale-105 transition-transform p-[1px]">
+                    {/* Conic-gradient background */}
+                    <div className="absolute inset-[1px] rounded-full bg-[conic-gradient(from_90deg,red,yellow,lime,cyan,blue,magenta,red)]" />
+                    <div className="absolute inset-[1px] rounded-full bg-[radial-gradient(circle_at_center,white_0%,transparent_62%)] pointer-events-none" />
                     
+                    {/* Center Preview Dot showing current selected color with standard glass dome style */}
+                    <div 
+                      className="absolute inset-[12px] rounded-full shadow-[inset_0_1.5px_3px_rgba(255,255,255,0.45),0_1.5px_4px_rgba(0,0,0,0.45)] border border-black/30 pointer-events-none flex items-center justify-center transition-colors duration-150" 
+                      style={{ 
+                        backgroundColor: 
+                          activeSubTab === 'stroke' ? (clip?.strokeColor || "#000000") : 
+                          activeSubTab === 'glow' ? (clip?.glowColor || "#ffffff") : 
+                          activeSubTab === 'shadow' ? (clip?.shadowColor || "#000000") : 
+                          (clip?.color || "#ffffff") 
+                      }}
+                    >
+                      {/* Gloss glossmorphism highlight reflection */}
+                      <div className="absolute top-[1px] left-[1.5px] right-[1.5px] h-[5px] rounded-t-full bg-[linear-gradient(180deg,rgba(255,255,255,0.35)_0%,rgba(255,255,255,0)_100%)]" />
+                    </div>
+
                     <input
                       type="color"
-                      value={clip?.color || "#ffffff"}
-                      onChange={(e) => updateClip({ color: e.target.value })}
-                      className="absolute w-full h-[200%] -top-[50%] p-0 border-none bg-transparent cursor-pointer opacity-0"
-                      style={{ paddingTop: '0px', paddingLeft: '0px', paddingRight: '0px', paddingBottom: '-5px', marginBottom: '0px', marginRight: '0px', width: '0px' }}
+                      aria-label="Color Picker"
+                      value={
+                        activeSubTab === 'stroke' ? (clip?.strokeColor || "#000000") : 
+                        activeSubTab === 'glow' ? (clip?.glowColor || "#ffffff") : 
+                        activeSubTab === 'shadow' ? (clip?.shadowColor || "#000000") : 
+                        (clip?.color || "#ffffff")
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (activeSubTab === 'stroke') {
+                          updateClip({ strokeColor: val, strokeWidth: clip?.strokeWidth || 1.5 });
+                        } else if (activeSubTab === 'glow') {
+                          updateClip({ glowColor: val, glowRadius: clip?.glowRadius || 8 });
+                        } else if (activeSubTab === 'shadow') {
+                          updateClip({ shadowColor: val, shadowBlur: clip?.shadowBlur || 5, shadowOffsetX: clip?.shadowOffsetX || 3, shadowOffsetY: clip?.shadowOffsetY || 3 });
+                        } else {
+                          updateClip({ color: val });
+                        }
+                      }}
+                      className="absolute inset-0 p-0 border-none bg-transparent cursor-pointer opacity-0 w-full h-full"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Sub-tabs for properties - Text Stroke Glow Spacing Shadow */}
-              <div className="flex items-center justify-center gap-[2px] mt-2 mb-1">
-                 {subTabs.map(tab => (
-                   <button
-                     key={tab.id}
-                     onClick={() => setActiveSubTab(tab.id)}
-                     className={`px-2 py-[3px] rounded-full text-[8px] font-medium transition-colors ${
-                       activeSubTab === tab.id 
-                         ? 'bg-zinc-700/80 text-white shadow-sm font-semibold' 
-                         : 'text-zinc-500 hover:text-white hover:bg-white/5'
-                     }`}
-                   >
-                     {tab.label}
-                   </button>
-                 ))}
+              {/* Minimal Capsule Sub-tabs */}
+              <div className="flex items-center justify-between gap-[2px] mt-1 pt-1.5 border-t border-white/[0.04] w-full shrink-0">
+                 {subTabs.map(tab => {
+                   const isActive = activeSubTab === tab.id;
+                   return (
+                     <button
+                       key={tab.id}
+                       onClick={() => setActiveSubTab(tab.id)}
+                       className={`px-1.5 py-[2px] rounded text-[6.5px] tracking-[0.16em] uppercase font-bold transition-all duration-150 ${
+                         isActive 
+                           ? 'bg-zinc-800 text-white border border-white/[0.05] shadow-[0_1px_3px_rgba(0,0,0,0.4)]' 
+                           : 'text-zinc-500 hover:text-zinc-300 border border-transparent'
+                       }`}
+                     >
+                       {tab.label}
+                     </button>
+                   );
+                 })}
               </div>
             </motion.div>
           )}
@@ -319,11 +609,11 @@ export function TextEditorMenu({
           {activeTab === 'animation' && (
             <motion.div
               key="animation"
-              initial={{ opacity: 0, x: -10 }}
+              initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 10 }}
-              transition={{ duration: 0.2 }}
-              className="grid grid-cols-2 gap-1 h-full px-1 overflow-y-auto scrollbar-hide"
+              exit={{ opacity: 0, x: 6 }}
+              transition={{ duration: 0.15 }}
+              className="grid grid-cols-2 gap-1 h-full px-0.5 overflow-y-auto scrollbar-hide"
             >
               {animations.map(a => {
                 const isSelected = clip?.textAnimation === a || (!clip?.textAnimation && a === "None");
@@ -331,9 +621,13 @@ export function TextEditorMenu({
                   <button
                     key={a}
                     onClick={() => updateClip({ textAnimation: a })}
-                    className={`flex items-center justify-center py-2 px-1 rounded-lg transition-all outline-none border ${isSelected ? 'bg-white/10 border-white/20 text-white shadow-inner' : 'border-white/5 bg-[#18181A] text-zinc-400 hover:text-white hover:bg-white/5'}`}
+                    className={`flex items-center justify-center p-1.5 rounded-lg transition-all outline-none border h-[28px] ${
+                      isSelected 
+                        ? 'bg-zinc-800 border-white/[0.08] text-white shadow-sm font-semibold' 
+                        : 'border-white/[0.03] bg-zinc-950/15 text-zinc-400 hover:text-white hover:bg-zinc-900/20'
+                    }`}
                   >
-                    <span className="text-[9px] font-medium">{a}</span>
+                    <span className="text-[7.5px] uppercase tracking-wider font-semibold">{a}</span>
                   </button>
                 );
               })}

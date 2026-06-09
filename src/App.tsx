@@ -32,6 +32,8 @@ import {
   X,
   Save,
   Move,
+  Maximize,
+  RotateCw,
   Wand2,
   Activity,
   Blend,
@@ -51,6 +53,12 @@ import {
   Download,
   Share,
   Mic,
+  ZoomIn,
+  ZoomOut,
+  Layers,
+  Link2,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -60,7 +68,7 @@ import { TextEditorMenu } from "./TextEditorMenu";
 import { Screen, Layer, Keyframe, Clip, Project } from "./types";
 import { getInterpolatedProps } from "./lib/utils";
 import { VideoRenderer, AudioRenderer } from "./components/Renderers";
-import { MinusIcon, CompactRulerControl, SpeedRulerControl } from "./components/Controls";
+import { MinusIcon, CompactRulerControl, SpeedRulerControl, ScaleRulerControl } from "./components/Controls";
 
 // --- Mock Data & Constants ---
 const BASE_PIXELS_PER_SECOND = 100;
@@ -284,6 +292,137 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
   );
 }
 
+interface CropControlOverlayProps {
+  clip: any;
+  updateClipsProperties: (clipIds: string[], updates: any) => void;
+}
+
+function CropControlOverlay({ clip, updateClipsProperties }: CropControlOverlayProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const cropTop = clip.cropRect?.top || 0;
+  const cropRight = clip.cropRect?.right || 0;
+  const cropBottom = clip.cropRect?.bottom || 0;
+  const cropLeft = clip.cropRect?.left || 0;
+
+  const handleCropEdgeDrag = (
+    e: React.PointerEvent<HTMLDivElement>,
+    edge: 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r'
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+
+    const container = target.closest(".media-preview-container");
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const initialCrop = {
+      top: clip.cropRect?.top || 0,
+      right: clip.cropRect?.right || 0,
+      bottom: clip.cropRect?.bottom || 0,
+      left: clip.cropRect?.left || 0,
+    };
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+
+    const handlePointerMove = (moveEv: PointerEvent) => {
+      const deltaX = moveEv.clientX - startX;
+      const deltaY = moveEv.clientY - startY;
+
+      const deltaXPercent = (deltaX / rect.width) * 100;
+      const deltaYPercent = (deltaY / rect.height) * 100;
+
+      let newCrop = { ...initialCrop };
+
+      if (edge.includes('t')) {
+        newCrop.top = Math.max(0, Math.min(100 - newCrop.bottom - 5, initialCrop.top + deltaYPercent));
+      }
+      if (edge.includes('b')) {
+        newCrop.bottom = Math.max(0, Math.min(100 - newCrop.top - 5, initialCrop.bottom - deltaYPercent));
+      }
+      if (edge.includes('l')) {
+        newCrop.left = Math.max(0, Math.min(100 - newCrop.right - 5, initialCrop.left + deltaXPercent));
+      }
+      if (edge.includes('r')) {
+        newCrop.right = Math.max(0, Math.min(100 - newCrop.left - 5, initialCrop.right - deltaXPercent));
+      }
+
+      updateClipsProperties([clip.id], { cropRect: newCrop });
+    };
+
+    const handlePointerUp = (upEv: PointerEvent) => {
+      target.releasePointerCapture(upEv.pointerId);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute border-2 border-white/95 grid grid-cols-3 grid-rows-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.55)] z-50 pointer-events-auto"
+      style={{
+        top: `${cropTop}%`,
+        right: `${cropRight}%`,
+        bottom: `${cropBottom}%`,
+        left: `${cropLeft}%`,
+        touchAction: "none"
+      }}
+    >
+      <div className="border-r border-b border-white/25"></div>
+      <div className="border-r border-b border-white/25"></div>
+      <div className="border-b border-white/25"></div>
+      <div className="border-r border-b border-white/25"></div>
+      <div className="border-r border-b border-white/25"></div>
+      <div className="border-b border-white/25"></div>
+      <div className="border-r border-white/25"></div>
+      <div className="border-r border-white/25"></div>
+      <div></div>
+
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'tl')}
+        className="absolute -top-1 -left-1 w-4 h-4 border-t-4 border-l-4 border-white pointer-events-auto cursor-nwse-resize z-55 hover:scale-110 active:scale-95 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'tr')}
+        className="absolute -top-1 -right-1 w-4 h-4 border-t-4 border-r-4 border-white pointer-events-auto cursor-nesw-resize z-55 hover:scale-110 active:scale-95 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'bl')}
+        className="absolute -bottom-1 -left-1 w-4 h-4 border-b-4 border-l-4 border-white pointer-events-auto cursor-nesw-resize z-55 hover:scale-110 active:scale-95 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'br')}
+        className="absolute -bottom-1 -right-1 w-4 h-4 border-b-4 border-r-4 border-white pointer-events-auto cursor-nwse-resize z-55 hover:scale-110 active:scale-95 transition-transform"
+      />
+
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 't')}
+        className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1 w-7 h-1.5 bg-white rounded-full border border-zinc-900 pointer-events-auto cursor-ns-resize z-55 hover:scale-y-125 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'b')}
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1 w-7 h-1.5 bg-white rounded-full border border-zinc-900 pointer-events-auto cursor-ns-resize z-55 hover:scale-y-125 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'l')}
+        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1 h-7 w-1.5 bg-white rounded-full border border-zinc-900 pointer-events-auto cursor-ew-resize z-55 hover:scale-x-125 transition-transform"
+      />
+      <div
+        onPointerDown={(e) => handleCropEdgeDrag(e, 'r')}
+        className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1 h-7 w-1.5 bg-white rounded-full border border-zinc-900 pointer-events-auto cursor-ew-resize z-55 hover:scale-x-125 transition-transform"
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -378,6 +517,7 @@ export default function App() {
   const [activeExpandedMenu, setActiveExpandedMenu] = useState<string | null>(
     null,
   );
+  const [activeTransformTab, setActiveTransformTab] = useState<"position" | "scale" | "rotate">("position");
   const [maskAdjustOpen, setMaskAdjustOpen] = useState(false);
   useEffect(() => {
     if (activeExpandedMenu === "mask") {
@@ -396,8 +536,113 @@ export default function App() {
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const selectedClipId = selectedClipIds.length === 1 ? selectedClipIds[0] : null;
   const setSelectedClipId = (id: string | null) => setSelectedClipIds(id === null ? [] : [id]);
+  const [multiSelectActive, setMultiSelectActive] = useState(false);
+  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [marquee, setMarquee] = useState<{ startX: number, startY: number, currentX: number, currentY: number } | null>(null);
   const [showKeyframeGraph, setShowKeyframeGraph] = useState(false);
+
+  const [transitionModal, setTransitionModal] = useState<{
+    prevClipId: string;
+    currentClipId: string;
+    layerId: string;
+    type: string;
+    duration: number;
+  } | null>(null);
+
+  const isTransitionAllowed = useCallback((clipA: Clip, clipB: Clip): boolean => {
+    if (clipA.type === "text" || clipB.type === "text") return false;
+    if (clipA.type === "audio" && clipB.type === "audio") return true;
+    if ((clipA.type === "image" || clipA.type === "video") && (clipB.type === "image" || clipB.type === "video")) {
+      return true;
+    }
+    return false;
+  }, []);
+
+  const getAdjacentClipPairsOnLayer = useCallback((layerClips: Clip[]) => {
+    const sorted = [...layerClips].sort((a, b) => a.leftSeconds - b.leftSeconds);
+    const pairs: { prev: Clip; current: Clip }[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const current = sorted[i];
+      const gap = current.leftSeconds - (prev.leftSeconds + prev.durationSeconds);
+      if (Math.abs(gap) <= 0.25 && isTransitionAllowed(prev, current)) {
+        pairs.push({ prev, current });
+      }
+    }
+    return pairs;
+  }, [isTransitionAllowed]);
+
+  const getLayerActiveClips = useCallback((layerClips: Clip[], curTime: number) => {
+    const sorted = [...layerClips].sort((a, b) => a.leftSeconds - b.leftSeconds);
+    const active: { clip: Clip; role: "incoming" | "outgoing" | "normal"; progress?: number; transitionType?: string }[] = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const c = sorted[i];
+      const prev = i > 0 ? sorted[i - 1] : null;
+      
+      const hasTransition = c.transition && prev && isTransitionAllowed(prev, c);
+      const td = (hasTransition && c.transition) ? c.transition.duration : 0;
+
+      if (hasTransition && td > 0 && curTime >= c.leftSeconds && curTime <= c.leftSeconds + td) {
+        const progress = (curTime - c.leftSeconds) / td;
+        active.push({
+          clip: prev!,
+          role: "outgoing",
+          progress,
+          transitionType: c.transition!.type
+        });
+        active.push({
+          clip: c,
+          role: "incoming",
+          progress,
+          transitionType: c.transition!.type
+        });
+        continue;
+      }
+      
+      const isNormalActive = curTime >= c.leftSeconds && curTime <= c.leftSeconds + c.durationSeconds;
+      if (isNormalActive) {
+        if (!active.some(a => a.clip.id === c.id)) {
+          active.push({
+            clip: c,
+            role: "normal"
+          });
+        }
+      }
+    }
+
+    return active;
+  }, [isTransitionAllowed]);
+
+  const addTransition = useCallback((incomingClipId: string, type: string, duration: number) => {
+    setClips((prevClips) =>
+      prevClips.map((c) => {
+        if (c.id === incomingClipId) {
+          return {
+            ...c,
+            transition: { type, duration },
+          };
+        }
+        return c;
+      })
+    );
+    setToastMessage("Transition applied successfully");
+    setTimeout(() => setToastMessage(null), 2000);
+  }, []);
+
+  const removeTransition = useCallback((incomingClipId: string) => {
+    setClips((prevClips) =>
+      prevClips.map((c) => {
+        if (c.id === incomingClipId) {
+          const { transition, ...rest } = c;
+          return rest;
+        }
+        return c;
+      })
+    );
+    setToastMessage("Transition removed");
+    setTimeout(() => setToastMessage(null), 2000);
+  }, []);
   
   const selectedClip = clips.find((c) => c.id === selectedClipId);
   const updateClipsProperties = useCallback((clipIds: string[], updates: Partial<Clip>) => {
@@ -419,7 +664,18 @@ export default function App() {
           }
         }
 
-        const updatedClip = { ...c, ...updates };
+        // Check if clip's layer is locked
+        const clipLayer = layers.find((l) => l.id === c.layerId);
+        let finalUpdates = { ...updates };
+        if (clipLayer?.isLocked && !hasApplicableKeyframes) {
+          // Block transform properties from being updated on base clip when locked
+          const transformKeys = ["translateX", "translateY", "scale", "scaleX", "scaleY", "rotation"];
+          for (const key of transformKeys) {
+            delete finalUpdates[key];
+          }
+        }
+
+        const updatedClip = { ...c, ...finalUpdates };
 
         if (hasApplicableKeyframes) {
           const existingIndex = kfs.findIndex(
@@ -445,7 +701,7 @@ export default function App() {
         return updatedClip;
       })
     );
-  }, []);
+  }, [layers]);
   const isAtKeyframe = selectedClip?.keyframes?.some(k => {
     const isClose = Math.abs(currentTime - (selectedClip.leftSeconds + k.timeOffset)) < 0.05;
     if (!isClose) return false;
@@ -841,7 +1097,9 @@ export default function App() {
 
     if (!hasMicPermission) {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Release the microphone active track after obtaining permission
+        stream.getTracks().forEach(track => track.stop());
         setHasMicPermission(true);
         setIsRecording(true);
         setToastMessage("Studio recording started...");
@@ -1326,6 +1584,44 @@ export default function App() {
     }
   };
 
+  const [copyLongPressed, setCopyLongPressed] = useState(false);
+
+  const onCopyPointerDown = (e: React.PointerEvent) => {
+    setCopyLongPressed(false);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => {
+      setCopyLongPressed(true);
+      setMultiSelectActive(prev => {
+        const next = !prev;
+        setToastMessage(next ? "Multi-Select Mode Activated" : "Multi-Select Mode Deactivated");
+        setTimeout(() => setToastMessage(null), 2000);
+        return next;
+      });
+      try {
+        if (navigator.vibrate) {
+          navigator.vibrate(50);
+        }
+      } catch (ex) {}
+    }, 600);
+  };
+
+  const onCopyPointerUp = (e: React.PointerEvent) => {
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+    if (!copyLongPressed) {
+      handleCopy();
+    }
+  };
+
+  const onCopyPointerLeave = () => {
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
+  };
+
   const handleExtractAudio = () => {
     const videoClip = clips.find(c => c.id === selectedClipId && c.type === "video");
     if (!videoClip) return;
@@ -1564,7 +1860,7 @@ export default function App() {
           e.touches[0].clientY - e.touches[1].clientY,
         );
         const scale = dist / initialDist;
-        setZoomLevel(Math.min(Math.max(0.2, initialZoom * scale), 10));
+        setZoomLevel(Math.min(Math.max(0.01, initialZoom * scale), 10));
       }
     };
 
@@ -1579,7 +1875,7 @@ export default function App() {
         e.preventDefault();
         const delta = -e.deltaY * 0.01;
         setZoomLevel((prev) =>
-          Math.min(Math.max(0.2, prev * Math.exp(delta)), 10),
+          Math.min(Math.max(0.01, prev * Math.exp(delta)), 10),
         );
       }
     };
@@ -1615,13 +1911,19 @@ export default function App() {
     if (e.touches.length === 2 && selectedClipId) {
       const clip = clips.find(c => c.id === selectedClipId);
       if (clip) {
+        // Stop if layer is locked
+        const clipLayer = layers.find(l => l.id === clip.layerId);
+        if (clipLayer?.isLocked) return;
+
         const startX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         const startY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const startDistance = Math.hypot(dx, dy) || 1;
         previewTouchRef.current = {
-                          startTranslateX: clip.translateX || 0,
+          startX,
+          startY,
+          startTranslateX: clip.translateX || 0,
           startTranslateY: clip.translateY || 0,
           startDistance,
           startScale: clip.scale || 1,
@@ -1633,6 +1935,12 @@ export default function App() {
 
   const handlePreviewTouchMove = (e: React.TouchEvent) => {
     if (e.touches.length === 2 && previewTouchRef.current && previewTouchRef.current.activeClipId === selectedClipId) {
+      const clip = clips.find(c => c.id === selectedClipId);
+      if (clip) {
+        const clipLayer = layers.find(l => l.id === clip.layerId);
+        if (clipLayer?.isLocked) return;
+      }
+
       const currentX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
       const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
       const deltaX = (currentX - previewTouchRef.current.startX) / appScale;
@@ -1675,10 +1983,19 @@ export default function App() {
     const target = e.target as HTMLElement;
     target.setPointerCapture(e.pointerId);
     
+    const wasAlreadySelected = selectedClipIds.includes(clip.id);
     let activeSelectedIds = selectedClipIds;
-    if (!selectedClipIds.includes(clip.id)) {
-      activeSelectedIds = [clip.id];
-      setSelectedClipIds(activeSelectedIds);
+    
+    if (multiSelectActive) {
+      if (!wasAlreadySelected) {
+        activeSelectedIds = [...selectedClipIds, clip.id];
+        setSelectedClipIds(activeSelectedIds);
+      }
+    } else {
+      if (!wasAlreadySelected) {
+        activeSelectedIds = [clip.id];
+        setSelectedClipIds(activeSelectedIds);
+      }
     }
 
     const startX = e.clientX;
@@ -1697,6 +2014,7 @@ export default function App() {
     const initialScrollTop = timelineScrollRef.current?.scrollTop || 0;
 
     let isDraggingMode = false;
+    let didMove = false;
     let dragTimeout = setTimeout(() => {
       isDraggingMode = true;
     }, 400); // 400ms hold delay to drag
@@ -1708,6 +2026,10 @@ export default function App() {
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const deltaX = moveEvent.clientX - startX;
       const deltaY = moveEvent.clientY - startY;
+
+      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+        didMove = true;
+      }
 
       if (!isDraggingMode) {
         if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
@@ -1793,7 +2115,6 @@ export default function App() {
       setClips((prevClips) => {
         // Evaluate horizontal bounds to prevent crossing x=0
         let effectiveDelta = finalDeltaSeconds;
-        let minLeft = Infinity;
         activeSelectedIds.forEach(id => {
           const init = initialClipsData.get(id);
           if (init && init.left + effectiveDelta < 0) {
@@ -1841,6 +2162,20 @@ export default function App() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
+
+      // Handle selection toggles on simple tap/click
+      if (!didMove && !isDraggingMode) {
+        if (multiSelectActive) {
+          if (wasAlreadySelected) {
+            // Deselect on simple tap if it was already selected prior to mouse down
+            setSelectedClipIds(prev => prev.filter(id => id !== clip.id));
+          }
+          // Note: If it wasn't selected, it got added on Pointer Down, which stays selected. Perfect!
+        } else {
+          // Normal mode: select only this clip
+          setSelectedClipId(clip.id);
+        }
+      }
 
       // If a layer was created but the clip didn't end up on it, delete the layer
       if (createdLayerId) {
@@ -2863,215 +3198,272 @@ const renderEditor = () => (
             {[...visibleLayers].reverse().map((layer) => {
               if (layer.isHidden) return null;
               const layerClips = clips.filter((c) => c.layerId === layer.id);
-              // Find active clip
-              const activeClipRaw = layerClips.find(
-                (c) =>
-                  currentTime >= c.leftSeconds &&
-                  currentTime <= c.leftSeconds + c.durationSeconds,
-              );
-
-              if (!activeClipRaw) return null;
-
-              const interpolatedProps = getInterpolatedProps(activeClipRaw, currentTime - activeClipRaw.leftSeconds, activeExpandedMenu);
-              const activeClip = { ...activeClipRaw, ...interpolatedProps };
-
-              const getClipPath = (
-                maskType?: string,
-                maskWidth: number = 60,
-                maskHeight: number = 60,
-                maskRoundness: number = 15
-              ) => {
-                switch (maskType) {
-                  case "circle":
-                    return `ellipse(${maskWidth / 2}% ${maskHeight / 2}% at 50% 50%)`;
-                  case "square": {
-                    const topBottom = (100 - maskHeight) / 2;
-                    const leftRight = (100 - maskWidth) / 2;
-                    return `inset(${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% ${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% round ${maskRoundness}px)`;
-                  }
-                  case "half":
-                    return `inset(0% 0% ${100 - maskHeight}% 0%)`;
-                  default:
-                    return "none";
-                }
-              };
-
-              const clipPathVal = getClipPath(
-                activeClip.maskType,
-                activeClip.maskWidth,
-                activeClip.maskHeight,
-                activeClip.maskRoundness
-              );
-
-              const transformStyle: React.CSSProperties = {
-                transformOrigin: `${(activeClip.anchorPointX ?? 0.5) * 100}% ${(activeClip.anchorPointY ?? 0.5) * 100}%`,
-                transform: `
-                  translate(${activeClip.translateX || 0}px, ${activeClip.translateY || 0}px)
-                  rotate(${activeClip.rotation || 0}deg)
-                  scaleX(${(activeClip.scaleX ?? 1) * (activeClip.scale ?? 1)})
-                  scaleY(${(activeClip.scaleY ?? 1) * (activeClip.scale ?? 1)})
-                `,
-                clipPath: "none",
-                opacity: activeClip.opacity ?? 1,
-                mixBlendMode: activeClip.mixBlendMode as any || "normal",
-                filter: `
-                  blur(${activeClip.blur || 0}px)
-                  brightness(${activeClip.brightness === undefined ? 100 : activeClip.brightness}%)
-                  contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%)
-                  saturate(${activeClip.saturation === undefined ? 100 : activeClip.saturation}%)
-                `.trim(),
-                ...(activeClip.cropRatio ? { aspectRatio: activeClip.cropRatio.replace(":", "/") } : {})
-              };
+              
+              // Find active clip(s) for the layer based on transition rules
+              const activeClipInfos = getLayerActiveClips(layerClips, currentTime);
+              if (activeClipInfos.length === 0) return null;
 
               return (
                 <div
                   key={layer.id}
                   className="absolute inset-0 flex items-center justify-center pointer-events-none"
                 >
-                  {erroredClips.has(activeClip.id) &&
-                  activeClip.type !== "text" ? (
-                    <div
-                      className="absolute inset-0 flex flex-col items-center justify-center bg-[#171719] border border-red-500/50 m-4 rounded-[32px] overflow-hidden"
-                      style={transformStyle}
-                    >
-                      <AlertCircle className="text-red-500 mb-2" size={32} />
-                      <span className="text-red-400 text-sm font-bold">
-                        File missing
-                      </span>
-                    </div>
-                  ) : (
-                    <>
-                      {activeClip.type === "text" && (
-                        <div
-                          id={`clip-media-${activeClip.id}`}
-                          className="flex items-center justify-center w-full h-full font-sans break-words whitespace-pre-wrap text-center overflow-hidden"
-                          style={{
-                            ...transformStyle,
-                            color: activeClip.color || "#ffffff",
-                            fontSize: `${activeClip.fontSize || 48}px`,
-                            fontFamily: activeClip.fontFamily || "sans-serif",
-                            ...(activeClip.textAnimation === "Fade In" ? { opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1) } : {}),
-                            ...(activeClip.textAnimation === "Slide Up" ? { 
-                                opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1),
-                                transform: `${transformStyle.transform} translateY(${(1 - Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1)) * 50}px)`
-                            } : {}),
-                            ...(activeClip.textAnimation === "Bounce" ? { 
-                                opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1),
-                                transform: `${transformStyle.transform} translateY(${-(Math.sin(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1) * Math.PI) * 20 * (1-Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1)))}px)`
-                            } : {})
-                          }}
-                        >
-                          <span
-                             className={`pointer-events-none select-none ${!activeClip.text ? 'opacity-40 italic' : ''}`}>
-                             {activeClip.text ? (
-                               activeClip.textAnimation === "Typewriter" 
-                                 ? (activeClip.text || "").substring(0, Math.floor(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 2) * (activeClip.text || "").length))
-                                 : activeClip.text
-                             ) : (selectedClipId === activeClip.id ? "Type text..." : "")}
-                          </span>
-                        </div>
-                      )}
-                      {activeClip.type === "image" && (
-                        <div
-                          className="pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
-                          style={{
-                               ...transformStyle,
-                               ...(activeClip.cropRatio ? {
-                                  width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
-                                  height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
-                               } : { width: '100%', height: '100%' }),
-                          }}
-                        >
+                  {activeClipInfos.map(({ clip: activeClipRaw, role, progress, transitionType }) => {
+                    const interpolatedProps = getInterpolatedProps(activeClipRaw, currentTime - activeClipRaw.leftSeconds, activeExpandedMenu);
+                    const activeClip = { ...activeClipRaw, ...interpolatedProps };
+
+                    const getClipPath = (
+                      maskType?: string,
+                      maskWidth: number = 60,
+                      maskHeight: number = 60,
+                      maskRoundness: number = 15
+                    ) => {
+                      switch (maskType) {
+                        case "circle":
+                          return `ellipse(${maskWidth / 2}% ${maskHeight / 2}% at 50% 50%)`;
+                        case "square": {
+                          const topBottom = (100 - maskHeight) / 2;
+                          const leftRight = (100 - maskWidth) / 2;
+                          return `inset(${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% ${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% round ${maskRoundness}px)`;
+                        }
+                        case "half":
+                          return `inset(0% 0% ${100 - maskHeight}% 0%)`;
+                        default:
+                          return "none";
+                      }
+                    };
+
+                    let clipPathVal = getClipPath(
+                      activeClip.maskType,
+                      activeClip.maskWidth,
+                      activeClip.maskHeight,
+                      activeClip.maskRoundness
+                    );
+
+                    // Apply wipe transitions on incoming clip
+                    if (role === "incoming" && progress !== undefined && transitionType) {
+                      if (transitionType === "wipe-left") {
+                        clipPathVal = `inset(0 0 0 ${100 - progress * 100}%)`;
+                      } else if (transitionType === "wipe-right") {
+                        clipPathVal = `inset(0 ${100 - progress * 100}% 0 0)`;
+                      }
+                    }
+
+                    // Apply visual effects based on progress
+                    let extraTransform = "";
+                    let transitionOpacityMultiplier = 1;
+                    let extraBlur = 0;
+
+                    if (progress !== undefined && transitionType) {
+                      const p = progress;
+                      if (transitionType === "fade" || transitionType === "crossfade") {
+                        if (role === "outgoing") transitionOpacityMultiplier = 1 - p;
+                        if (role === "incoming") transitionOpacityMultiplier = p;
+                      } else if (transitionType === "blur") {
+                        if (role === "outgoing") {
+                          transitionOpacityMultiplier = 1 - p;
+                          extraBlur = p * 15;
+                        }
+                        if (role === "incoming") {
+                          transitionOpacityMultiplier = p;
+                          extraBlur = (1 - p) * 15;
+                        }
+                      } else if (transitionType === "zoom-in") {
+                        if (role === "outgoing") {
+                          transitionOpacityMultiplier = 1 - p;
+                        } else if (role === "incoming") {
+                          transitionOpacityMultiplier = p;
+                          const scaleVal = 0.2 + p * 0.8;
+                          extraTransform = ` scale(${scaleVal})`;
+                        }
+                      } else if (transitionType === "slide-left") {
+                        if (role === "incoming") {
+                           extraTransform = ` translateX(${(1 - p) * 100}%)`;
+                        }
+                      } else if (transitionType === "slide-right") {
+                        if (role === "incoming") {
+                           extraTransform = ` translateX(${-(1 - p) * 100}%)`;
+                        }
+                      }
+                    }
+
+                    // Determine volume multiplier for audio crossfading
+                    let transVolumeMultiplier = 1;
+                    if (progress !== undefined && transitionType) {
+                      if (role === "outgoing") transVolumeMultiplier = 1 - progress;
+                      if (role === "incoming") transVolumeMultiplier = progress;
+                    }
+
+                    const transformStyle: React.CSSProperties = {
+                      transformOrigin: `${(activeClip.anchorPointX ?? 0.5) * 100}% ${(activeClip.anchorPointY ?? 0.5) * 100}%`,
+                      transform: `
+                        translate(${activeClip.translateX || 0}px, ${activeClip.translateY || 0}px)
+                        rotate(${activeClip.rotation || 0}deg)
+                        scaleX(${(activeClip.scaleX ?? 1) * (activeClip.scale ?? 1)})
+                        scaleY(${(activeClip.scaleY ?? 1) * (activeClip.scale ?? 1)})
+                        ${extraTransform}
+                      `,
+                      clipPath: (activeExpandedMenu === "crop" && selectedClipId === activeClip.id)
+                        ? "none"
+                        : (clipPathVal !== "none" ? clipPathVal : `inset(${activeClip.cropRect?.top || 0}% ${activeClip.cropRect?.right || 0}% ${activeClip.cropRect?.bottom || 0}% ${activeClip.cropRect?.left || 0}%)`),
+                      opacity: (activeClip.opacity ?? 1) * transitionOpacityMultiplier,
+                      mixBlendMode: activeClip.mixBlendMode as any || "normal",
+                      filter: `
+                        blur(${(activeClip.blur || 0) + extraBlur}px)
+                        brightness(${activeClip.brightness === undefined ? 100 : activeClip.brightness}%)
+                        contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%)
+                        saturate(${activeClip.saturation === undefined ? 100 : activeClip.saturation}%)
+                      `.trim(),
+                      ...(activeClip.cropRatio ? { aspectRatio: activeClip.cropRatio.replace(":", "/") } : {})
+                    };
+
+                    return (
+                      <React.Fragment key={`${layer.id}-${activeClip.id}-${role}`}>
+                        {erroredClips.has(activeClip.id) && activeClip.type !== "text" ? (
                           <div
-                            className="w-full h-full relative"
-                            style={{ clipPath: clipPathVal }}
+                            className="absolute inset-0 flex flex-col items-center justify-center bg-[#171719] border border-red-500/50 m-4 rounded-[32px] overflow-hidden pointer-events-none"
+                            style={transformStyle}
                           >
-                            <img
-                              id={`clip-media-${activeClip.id}`}
-                              src={activeClip.src || undefined}
-                              className="w-full h-full object-cover pointer-events-none"
-                              crossOrigin="anonymous"
-                              onError={() => handleClipError(activeClip.id)}
-                            />
+                            <AlertCircle className="text-red-500 mb-2" size={32} />
+                            <span className="text-red-400 text-sm font-bold">File missing</span>
                           </div>
-                          {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
-                             <div className="absolute inset-0 pointer-events-none border-2 border-white grid grid-cols-3 grid-rows-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-b border-white/40"></div>
-                               <div className="border-r border-white/40"></div>
-                               <div className="border-r border-white/40"></div>
-                               <div></div>
-                             </div>
-                          )}
-                          {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
-                            <MaskControlOverlay
-                              clip={activeClip}
-                              updateClipsProperties={updateClipsProperties}
-                            />
-                          )}
-                        </div>
-                      )}
-                      {activeClip.type === "video" && (
-                        <div
-                          className="pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
-                          style={{
-                               ...transformStyle,
-                               ...(activeClip.cropRatio ? {
-                                  width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
-                                  height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
-                               } : { width: '100%', height: '100%' }),
-                          }}
-                        >
-                          <div
-                            className="w-full h-full relative"
-                            style={{ clipPath: clipPathVal }}
-                          >
-                            <VideoRenderer
-                              id={`clip-media-${activeClip.id}`}
-                              clip={activeClip}
-                              currentTime={currentTime}
-                              isPlaying={isPlaying}
-                              isMuted={layer.isMuted}
-                              className="w-full h-full object-cover pointer-events-none"
-                              onError={() => handleClipError(activeClip.id)}
-                            />
-                          </div>
-                          {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
-                             <div className="absolute inset-0 pointer-events-none border-2 border-white grid grid-cols-3 grid-rows-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)] z-50">
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-r border-b border-white/40"></div>
-                               <div className="border-b border-white/40"></div>
-                               <div className="border-r border-white/40"></div>
-                               <div className="border-r border-white/40"></div>
-                               <div></div>
-                             </div>
-                          )}
-                          {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
-                            <MaskControlOverlay
-                              clip={activeClip}
-                              updateClipsProperties={updateClipsProperties}
-                            />
-                          )}
-                        </div>
-                      )}
-                      {activeClip.type === "audio" && (
-                        <AudioRenderer
-                          clip={activeClip}
-                          currentTime={currentTime}
-                          isPlaying={isPlaying}
-                          isMuted={layer.isMuted}
-                          onError={() => handleClipError(activeClip.id)}
-                        />
-                      )}
-                    </>
-                  )}
+                        ) : (
+                          <>
+                            {activeClip.type === "text" && (
+                              <div
+                                id={`clip-media-${activeClip.id}`}
+                                className="flex items-center justify-center w-full h-full font-sans break-words whitespace-pre-wrap text-center overflow-hidden absolute"
+                                style={{
+                                  ...transformStyle,
+                                  color: activeClip.color || "#ffffff",
+                                  fontSize: `${activeClip.fontSize || 48}px`,
+                                  fontFamily: activeClip.fontFamily || "sans-serif",
+                                  letterSpacing: activeClip.letterSpacing ? `${activeClip.letterSpacing}px` : undefined,
+                                  lineHeight: activeClip.lineHeight ? `${activeClip.lineHeight}` : undefined,
+                                  WebkitTextStroke: activeClip.strokeWidth ? `${activeClip.strokeWidth}px ${activeClip.strokeColor || "#000000"}` : undefined,
+                                  textShadow: activeClip.textShadow || (
+                                    activeClip.glowColor && activeClip.glowRadius 
+                                      ? `0 0 ${activeClip.glowRadius}px ${activeClip.glowColor}`
+                                      : activeClip.shadowColor 
+                                      ? `${activeClip.shadowOffsetX || 3}px ${activeClip.shadowOffsetY || 3}px ${activeClip.shadowBlur || 5}px ${activeClip.shadowColor}`
+                                      : undefined
+                                  ),
+                                  ...(activeClip.textAnimation === "Fade In" ? { opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1) } : {}),
+                                  ...(activeClip.textAnimation === "Slide Up" ? { 
+                                      opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1),
+                                      transform: `${transformStyle.transform} translateY(${(1 - Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1)) * 50}px)`
+                                  } : {}),
+                                  ...(activeClip.textAnimation === "Bounce" ? { 
+                                      opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1),
+                                      transform: `${transformStyle.transform} translateY(${-(Math.sin(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1) * Math.PI) * 20 * (1-Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1)))}px)`
+                                  } : {})
+                                }}
+                              >
+                                <span
+                                   className={`pointer-events-none select-none ${!activeClip.text ? 'opacity-40 italic' : ''}`}>
+                                   {activeClip.text ? (
+                                     activeClip.textAnimation === "Typewriter" 
+                                       ? (activeClip.text || "").substring(0, Math.floor(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 2) * (activeClip.text || "").length))
+                                       : activeClip.text
+                                   ) : (selectedClipId === activeClip.id ? "Type text..." : "")}
+                                </span>
+                              </div>
+                            )}
+
+                            {activeClip.type === "image" && (
+                              <div
+                                className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
+                                style={{
+                                     ...transformStyle,
+                                     ...(activeClip.cropRatio ? {
+                                        width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
+                                        height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
+                                     } : { width: '100%', height: '100%' }),
+                                }}
+                              >
+                                <div
+                                  className="w-full h-full relative"
+                                  style={{ clipPath: clipPathVal }}
+                                >
+                                  <img
+                                    id={`clip-media-${activeClip.id}`}
+                                    src={activeClip.src || undefined}
+                                    className="w-full h-full object-cover pointer-events-none"
+                                    crossOrigin="anonymous"
+                                    onError={() => handleClipError(activeClip.id)}
+                                  />
+                                </div>
+                                {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
+                                   <CropControlOverlay
+                                     clip={activeClip}
+                                     updateClipsProperties={updateClipsProperties}
+                                   />
+                                )}
+                                {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
+                                  <MaskControlOverlay
+                                    clip={activeClip}
+                                    updateClipsProperties={updateClipsProperties}
+                                  />
+                                )}
+                              </div>
+                            )}
+
+                            {activeClip.type === "video" && (
+                              <div
+                                className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
+                                style={{
+                                     ...transformStyle,
+                                     ...(activeClip.cropRatio ? {
+                                        width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
+                                        height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
+                                     } : { width: '100%', height: '100%' }),
+                                }}
+                              >
+                                <div
+                                  className="w-full h-full relative"
+                                  style={{ clipPath: clipPathVal }}
+                                >
+                                  <VideoRenderer
+                                    id={`clip-media-${activeClip.id}`}
+                                    clip={activeClip}
+                                    currentTime={currentTime}
+                                    isPlaying={isPlaying}
+                                    isMuted={layer.isMuted}
+                                    className="w-full h-full object-cover pointer-events-none"
+                                    onError={() => handleClipError(activeClip.id)}
+                                    volumeMultiplier={transVolumeMultiplier}
+                                  />
+                                </div>
+                                {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
+                                   <CropControlOverlay
+                                     clip={activeClip}
+                                     updateClipsProperties={updateClipsProperties}
+                                   />
+                                )}
+                                {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
+                                  <MaskControlOverlay
+                                    clip={activeClip}
+                                    updateClipsProperties={updateClipsProperties}
+                                  />
+                                )}
+                              </div>
+                            )}
+
+                            {activeClip.type === "audio" && (
+                              <AudioRenderer
+                                clip={activeClip}
+                                currentTime={currentTime}
+                                isPlaying={isPlaying}
+                                isMuted={layer.isMuted}
+                                onError={() => handleClipError(activeClip.id)}
+                                volumeMultiplier={transVolumeMultiplier}
+                              />
+                            )}
+                          </>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
               );
             })}
@@ -3248,6 +3640,11 @@ const renderEditor = () => (
                     key={layer.id}
                     className={`h-[32px] sm:h-[38px] flex flex-col items-center justify-center shrink-0 border-b group py-1 relative transition-all transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/20 border-indigo-500/50 scale-[1.02] z-50 shadow-xl" : "bg-zinc-800/20 border-white/5 backdrop-blur-sm z-10"}`}
                   >
+                    {layer.isLocked && (
+                      <div className="absolute top-0.5 right-1 pointer-events-none" title="Layer Locked">
+                        <Lock size={9} className="text-yellow-500/85 animate-pulse" />
+                      </div>
+                    )}
                     <div className="flex gap-0.5 sm:gap-1 items-center">
                       <button
                         onClick={() => toggleLayerMute(layer.id)}
@@ -3306,45 +3703,72 @@ const renderEditor = () => (
                               className="px-3 py-2 text-xs text-left text-zinc-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setLayers((prev) => {
-                                  const sorted = [...prev].sort(
-                                    (a, b) => b.order - a.order,
-                                  );
-                                  const visIdx = sorted.findIndex(
-                                    (l) => l.id === layer.id,
-                                  );
-                                  // insert new layer right above this one visually (so order is between this and the one above)
+                                setLayers((prevLayers) => {
+                                  const sorted = [...prevLayers].sort((a, b) => b.order - a.order);
+                                  const visIdx = sorted.findIndex((l) => l.id === layer.id);
+                                  // Find appropriate order position above
                                   let newOrder = layer.order + 0.5;
                                   if (visIdx > 0) {
-                                    newOrder =
-                                      (layer.order + sorted[visIdx - 1].order) /
-                                      2;
+                                    newOrder = (layer.order + sorted[visIdx - 1].order) / 2;
                                   } else {
                                     newOrder = layer.order + 1;
                                   }
-                                  return [
-                                    ...prev,
-                                    {
-                                      id: "L_" + Date.now(),
-                                      order: newOrder,
-                                      isMuted: false,
-                                      isHidden: false,
-                                    },
-                                  ];
+
+                                  const dupLayerId = "L_dup_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+                                  const dupLayer = {
+                                    ...layer,
+                                    id: dupLayerId,
+                                    order: newOrder,
+                                    name: layer.name ? `${layer.name} (Copy)` : "Layer Copy",
+                                    isLocked: layer.isLocked, // preserve locked state
+                                  };
+
+                                  const duplicatedClips = clips
+                                    .filter((c) => c.layerId === layer.id)
+                                    .map((c) => ({
+                                      ...c,
+                                      id: "C_" + Date.now() + "_" + Math.floor(Math.random() * 100000),
+                                      layerId: dupLayerId,
+                                      keyframes: c.keyframes ? c.keyframes.map((kf) => ({
+                                        ...kf,
+                                        properties: { ...kf.properties },
+                                      })) : undefined,
+                                    }));
+                                  
+                                  setClips((prevClips) => [...prevClips, ...duplicatedClips]);
+                                  return [...prevLayers, dupLayer];
                                 });
+
+                                setToastMessage("Layer duplicated");
+                                setTimeout(() => setToastMessage(null), 2000);
                                 setLayerMenuOpenId(null);
                               }}
                             >
-                              <PlusIcon size={12} /> Add Up
+                              <Copy size={12} /> Duplicate
                             </button>
                             <button
-                              className="px-3 py-2 text-xs text-left text-zinc-300 hover:bg-white/10 hover:text-white transition-colors"
+                              className="px-3 py-2 text-xs text-left text-zinc-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                setLayers((prev) =>
+                                  prev.map((l) =>
+                                    l.id === layer.id ? { ...l, isLocked: !l.isLocked } : l
+                                  )
+                                );
+                                setToastMessage(layer.isLocked ? "Layer unlocked" : "Layer locked");
+                                setTimeout(() => setToastMessage(null), 2000);
                                 setLayerMenuOpenId(null);
                               }}
                             >
-                              Decide Later
+                              {layer.isLocked ? (
+                                <>
+                                  <Unlock size={12} /> Unlock
+                                </>
+                              ) : (
+                                <>
+                                  <Lock size={12} /> Lock
+                                </>
+                              )}
                             </button>
                             <button
                               className="px-3 py-2 text-xs text-left text-red-500 hover:bg-red-500/20 transition-colors flex items-center gap-2 border-t border-white/10"
@@ -3468,7 +3892,9 @@ const renderEditor = () => (
                     {Array.from({ length: Math.ceil(maxTimelineDuration) }).map(
                       (_, i) => {
                         let step = 1;
-                        if (pixelsPerSecond < 10) step = 30; // very zoomed out
+                        if (pixelsPerSecond < 2) step = 300; // marks every 5 mins
+                        else if (pixelsPerSecond < 5) step = 60; // marks every 1 min
+                        else if (pixelsPerSecond < 10) step = 30; // very zoomed out
                         else if (pixelsPerSecond < 20) step = 10;
                         else if (pixelsPerSecond < 35) step = 5;
                         else if (pixelsPerSecond < 70) step = 2; // normal default is 100
@@ -3476,7 +3902,7 @@ const renderEditor = () => (
                         const showText = i % step === 0;
 
                         // Skip rendering the tick entirely if it's too squished
-                        const hideTick = pixelsPerSecond < 5 && i % 5 !== 0;
+                        const hideTick = pixelsPerSecond < 2 ? i % 60 !== 0 : (pixelsPerSecond < 5 ? i % 10 !== 0 : false);
                         if (hideTick) return null;
 
                         return (
@@ -4096,6 +4522,55 @@ const renderEditor = () => (
                                 )}
                               </div>
                             ))}
+
+                          {/* Render Transitions for this layer */}
+                          {getAdjacentClipPairsOnLayer(clips.filter((c) => c.layerId === layer.id)).map(({ prev, current }) => {
+                            const boundaryX = current.leftSeconds * pixelsPerSecond;
+                            const hasTransition = !!current.transition;
+
+                            return (
+                              <div
+                                key={`transition-btn-${prev.id}-${current.id}`}
+                                className="absolute pointer-events-auto"
+                                style={{
+                                  left: boundaryX,
+                                  transform: "translateX(-50%)",
+                                  top: 0,
+                                  bottom: 0,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  zIndex: 49,
+                                }}
+                              >
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setTransitionModal({
+                                      prevClipId: prev.id,
+                                      currentClipId: current.id,
+                                      layerId: layer.id,
+                                      type: current.transition?.type || "crossfade",
+                                      duration: current.transition?.duration || 0.5,
+                                    });
+                                  }}
+                                  className={`w-[19px] h-[19px] rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                                    hasTransition
+                                      ? "bg-indigo-500 hover:bg-indigo-600 border border-indigo-400 text-white hover:scale-[1.15] active:scale-95 shadow-md shadow-indigo-500/30"
+                                      : "bg-zinc-800 hover:bg-indigo-500 border border-white/20 hover:border-indigo-400/50 text-zinc-300 hover:text-white hover:scale-[1.15] active:scale-95 shadow-lg opacity-60 hover:opacity-100"
+                                  }`}
+                                  title={hasTransition ? `Edit transition: ${current.transition?.type}` : "Add Transition"}
+                                >
+                                  {hasTransition ? (
+                                    <span className="text-[9px] font-extrabold text-white uppercase tracking-wider">T</span>
+                                  ) : (
+                                    <PlusIcon size={10} className="stroke-[3]" />
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       ))}
 
@@ -4148,7 +4623,7 @@ const renderEditor = () => (
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[220px]" : "rounded-[24px] h-[50px] justify-center w-[220px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[220px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[220px]" : "rounded-[24px] h-[50px] justify-center w-[220px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "volume" && (
@@ -4485,15 +4960,25 @@ const renderEditor = () => (
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: 10 }}
                   transition={{ duration: 0.2 }}
-                  className="flex flex-col w-full h-auto max-h-[260px] shrink-0 overflow-y-auto scrollbar-hide pt-0 pb-1"
+                  className="flex flex-col w-full h-auto max-h-[240px] shrink-0 overflow-y-auto scrollbar-hide pt-0.5 pb-2"
                 >
-                  <div className="flex justify-between items-center w-full px-3.5 mb-1.5 shrink-0">
-                    <span className="text-[10px] font-semibold text-white/90">
+                  <div className="flex justify-between items-center w-full px-2.5 mb-1 shrink-0">
+                    <span className="text-[9.5px] font-bold text-white/90 uppercase tracking-widest flex items-center gap-1">
+                      <Move size={10} className="text-zinc-400" />
                       Transform
                     </span>
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => {
+                          const clip = clips.find((c) => c.id === selectedClipId);
+                          if (clip) {
+                            const clipLayer = layers.find((l) => l.id === clip.layerId);
+                            if (clipLayer?.isLocked) {
+                              setToastMessage("Layer is locked");
+                              setTimeout(() => setToastMessage(null), 2000);
+                              return;
+                            }
+                          }
                           setClips((prev) =>
                             prev.map((c) =>
                               c.id === selectedClipId
@@ -4508,84 +4993,281 @@ const renderEditor = () => (
                             ),
                           );
                         }}
-                        className="text-[8px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300 hover:text-white uppercase tracking-wider transition-colors"
+                        className="text-[7.5px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-2 py-0.5 rounded font-black text-zinc-400 uppercase tracking-wider transition-all"
                       >
-                        Reset All
+                        Reset
                       </button>
+                      <div className="w-px h-3 bg-zinc-700/80"></div>
                       <button
                         onClick={() => setActiveExpandedMenu(null)}
-                        className="text-zinc-400 hover:text-white ml-0.5"
+                        className="text-emerald-400 hover:text-emerald-300 ml-0.5 p-0.5 rounded-full hover:bg-white/5 transition-colors"
                       >
                         <Check size={14} />
                       </button>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-x-2.5 gap-y-1.5 w-full px-3 mt-1.5">
-                    <div className="flex flex-col gap-1.5">
-                      <CompactRulerControl
-                        label="Rotation"
-                        value={currentSelectedClipInterpolatedProps?.rotation || 0}
-                        onChange={(val) => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: val });
-                        }}
-                        onReset={() => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: 0 });
-                        }}
-                        min={-180}
-                        max={180}
-                        step={1}
-                        unit="°"
-                        sensitivity={0.5}
-                      />
-                      <CompactRulerControl
-                        label="Scale"
-                        value={currentSelectedClipInterpolatedProps?.scale ?? 1}
-                        onChange={(val) => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { scale: val });
-                        }}
-                        onReset={() => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { scale: 1 });
-                        }}
-                        min={0.1}
-                        max={5}
-                        step={0.01}
-                        unit="x"
-                        sensitivity={0.01}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <CompactRulerControl
-                        label="Pos X"
-                        value={currentSelectedClipInterpolatedProps?.translateX || 0}
-                        onChange={(val) => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: val });
-                        }}
-                        onReset={() => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: 0 });
-                        }}
-                        min={-2000}
-                        max={2000}
-                        step={1}
-                        unit="px"
-                        sensitivity={1}
-                      />
-                      <CompactRulerControl
-                        label="Pos Y"
-                        value={currentSelectedClipInterpolatedProps?.translateY || 0}
-                        onChange={(val) => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: val });
-                        }}
-                        onReset={() => {
-                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: 0 });
-                        }}
-                        min={-2000}
-                        max={2000}
-                        step={1}
-                        unit="px"
-                        sensitivity={1}
-                      />
-                    </div>
+                  {/* Sleek minimalist tab bar with thin vertical dividers */}
+                  <div className="flex w-full px-2.5 my-1.5 items-center justify-between shrink-0 border-b border-white/[0.04] pb-1">
+                    <button
+                      onClick={() => setActiveTransformTab("position")}
+                      className={`flex-1 py-0.5 text-[8px] font-bold tracking-[0.14em] uppercase transition-colors duration-150 ${
+                        activeTransformTab === "position"
+                          ? "text-white font-black"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Pos
+                    </button>
+                    <div className="w-[1px] h-2 bg-white/[0.06] shrink-0" />
+                    <button
+                      onClick={() => setActiveTransformTab("scale")}
+                      className={`flex-1 py-0.5 text-[8px] font-bold tracking-[0.14em] uppercase transition-colors duration-150 ${
+                        activeTransformTab === "scale"
+                          ? "text-white font-black"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Scale
+                    </button>
+                    <div className="w-[1px] h-2 bg-white/[0.06] shrink-0" />
+                    <button
+                      onClick={() => setActiveTransformTab("rotate")}
+                      className={`flex-1 py-0.5 text-[8px] font-bold tracking-[0.14em] uppercase transition-colors duration-150 ${
+                        activeTransformTab === "rotate"
+                          ? "text-white font-black"
+                          : "text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      Rotate
+                    </button>
+                  </div>
+
+                  {/* Tab-specific micro-form layout area */}
+                  <div className="px-2.5 pb-0.5 w-full flex flex-col gap-1">
+                    {activeTransformTab === "position" && (
+                      <div
+                        className="grid grid-cols-[74px_1fr] gap-x-1.5 items-center w-full"
+                        style={{ height: "100px", marginTop: "0px" }}
+                      >
+                        {/* Visual D-Pad positioning wheel */}
+                        <div
+                          className="flex flex-col items-center justify-center bg-zinc-900/30 py-1 px-1 rounded-xl border border-white/5 h-full"
+                          style={{ height: "100px", paddingTop: "4px", paddingLeft: "4px", marginTop: "0px", marginLeft: "0px", width: "74px" }}
+                        >
+                          <span className="text-[7px] uppercase tracking-wider text-zinc-500 mb-1 font-extrabold leading-none">Nudge</span>
+                          <div className="relative w-[56px] h-[56px] flex items-center justify-center">
+                            <div className="absolute inset-0 rounded-full border border-white/5 bg-zinc-950/65 shadow-inner"></div>
+                            
+                            {/* Up */}
+                            <button
+                              onClick={() => {
+                                const currentY = currentSelectedClipInterpolatedProps?.translateY || 0;
+                                updateClipsProperties([selectedClipId], { translateY: currentY - 10 });
+                              }}
+                              className="absolute top-[-3px] w-[20px] h-[20px] flex items-center justify-center rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white active:scale-90 transition-all border border-white/10"
+                            >
+                              <ArrowUp size={8} />
+                            </button>
+                            
+                            {/* Left */}
+                            <button
+                              onClick={() => {
+                                const currentX = currentSelectedClipInterpolatedProps?.translateX || 0;
+                                updateClipsProperties([selectedClipId], { translateX: currentX - 10 });
+                              }}
+                              className="absolute left-[-3px] w-[20px] h-[20px] flex items-center justify-center rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white active:scale-90 transition-all border border-white/10"
+                            >
+                              <ArrowUp size={8} className="-rotate-90" />
+                            </button>
+                            
+                            {/* Center Target (Reset Coordinates) */}
+                            <button
+                              onClick={() => {
+                                updateClipsProperties([selectedClipId], { translateX: 0, translateY: 0 });
+                              }}
+                              className="w-4 h-4 rounded-full bg-indigo-500 hover:bg-indigo-400 shadow-md flex items-center justify-center text-white active:scale-95 transition-all z-10"
+                              title="Reset Axis"
+                            >
+                              <div className="w-1 h-1 bg-white rounded-full"></div>
+                            </button>
+                            
+                            {/* Right */}
+                            <button
+                              onClick={() => {
+                                const currentX = currentSelectedClipInterpolatedProps?.translateX || 0;
+                                updateClipsProperties([selectedClipId], { translateX: currentX + 10 });
+                              }}
+                              className="absolute right-[-3px] w-[20px] h-[20px] flex items-center justify-center rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white active:scale-90 transition-all border border-white/10"
+                            >
+                              <ArrowUp size={8} className="rotate-90" />
+                            </button>
+                            
+                            {/* Down */}
+                            <button
+                              onClick={() => {
+                                const currentY = currentSelectedClipInterpolatedProps?.translateY || 0;
+                                updateClipsProperties([selectedClipId], { translateY: currentY + 10 });
+                              }}
+                              className="absolute bottom-[-3px] w-[20px] h-[20px] flex items-center justify-center rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white active:scale-90 transition-all border border-white/10"
+                            >
+                              <ArrowUp size={8} className="rotate-180" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Traditional drag rulers */}
+                        <div
+                          className="flex flex-col gap-1 w-full justify-center"
+                          style={{ height: "100px" }}
+                        >
+                          <CompactRulerControl
+                            label="Axis X"
+                            value={currentSelectedClipInterpolatedProps?.translateX || 0}
+                            onChange={(val) => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: val });
+                            }}
+                            onReset={() => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: 0 });
+                            }}
+                            min={-2000}
+                            max={2000}
+                            step={1}
+                            unit="px"
+                            sensitivity={1.5}
+                            style={{ height: "46px", marginTop: "0px", marginBottom: "0px", paddingTop: "0px", paddingBottom: "0px" }}
+                            rulerStyle={{ height: "24px" }}
+                            labelStyle={{ height: "12px", fontSize: "7.5px" }}
+                            headerStyle={{ height: "12px" }}
+                          />
+                          <CompactRulerControl
+                            label="Axis Y"
+                            value={currentSelectedClipInterpolatedProps?.translateY || 0}
+                            onChange={(val) => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: val });
+                            }}
+                            onReset={() => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: 0 });
+                            }}
+                            min={-2000}
+                            max={2000}
+                            step={1}
+                            unit="px"
+                            sensitivity={1.5}
+                            style={{ height: "46px", marginTop: "2px", marginBottom: "0px", paddingTop: "0px", paddingBottom: "0px" }}
+                            rulerStyle={{ height: "24px" }}
+                            labelStyle={{ height: "12px", fontSize: "7.5px" }}
+                            headerStyle={{ height: "12px" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTransformTab === "scale" && (
+                      <div className="flex flex-col gap-2 w-full min-h-[96px] justify-center bg-zinc-900/30 px-2 py-2 rounded-xl border border-white/5">
+                        <ScaleRulerControl
+                          value={currentSelectedClipInterpolatedProps?.scale ?? 1}
+                          onChange={(val) => {
+                            if (selectedClipId) updateClipsProperties([selectedClipId], { scale: val });
+                          }}
+                          onReset={() => {
+                            if (selectedClipId) updateClipsProperties([selectedClipId], { scale: 1 });
+                          }}
+                          label="Scale Factor"
+                        />
+                        
+                        {/* Premium snapping presets inline */}
+                        <div className="flex items-center justify-between w-full mt-1 px-0.5">
+                          <span className="text-[7px] uppercase tracking-wider text-zinc-500 font-extrabold pl-0.5">Quick</span>
+                          <div className="flex gap-0.5">
+                            {[0.5, 1.0, 1.5, 2.0, 3.0].map((s) => {
+                              const isSelected = Math.abs((currentSelectedClipInterpolatedProps?.scale ?? 1) - s) < 0.05;
+                              return (
+                                <button
+                                  key={s}
+                                  onClick={() => {
+                                    if (selectedClipId) updateClipsProperties([selectedClipId], { scale: s });
+                                  }}
+                                  className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-tight transition-all active:scale-95 ${
+                                    isSelected
+                                      ? "bg-indigo-600 text-white shadow-sm border border-indigo-500/30 font-black"
+                                      : "bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 border border-white/5"
+                                  }`}
+                                >
+                                  {s.toFixed(1)}x
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTransformTab === "rotate" && (
+                      <div className="grid grid-cols-[68px_1fr] gap-x-1.5 items-center w-full min-h-[96px]">
+                        {/* Visual dial rotation feedback circle */}
+                        <div className="flex flex-col items-center justify-center bg-zinc-900/30 py-1 px-1 rounded-xl border border-white/5 h-full">
+                          <span className="text-[7px] uppercase tracking-wider text-zinc-500 mb-1 font-extrabold leading-none">Dial</span>
+                          
+                          <div className="relative w-[44px] h-[44px] rounded-full border border-white/10 flex items-center justify-center bg-zinc-950/70 shadow-inner">
+                            <div className="absolute inset-0.5 rounded-full bg-gradient-to-b from-zinc-900 to-zinc-950"></div>
+                            
+                            {/* Inner rotational compass needle */}
+                            <div
+                              className="absolute w-7 h-7 rounded-full bg-zinc-800/90 border border-white/10 flex items-center justify-center shadow-md transition-transform duration-200"
+                              style={{ transform: `rotate(${currentSelectedClipInterpolatedProps?.rotation || 0}deg)` }}
+                            >
+                              <div className="absolute top-0.5 w-[1.5px] h-1.5 bg-indigo-500 rounded-full shadow-[0_0_6px_rgba(99,102,241,0.8)]" />
+                              <div className="w-1 h-1 bg-[#121212] rounded-full" />
+                            </div>
+                          </div>
+                          <span className="text-[9px] font-mono font-bold text-white mt-1 leading-none">
+                            {Math.round(currentSelectedClipInterpolatedProps?.rotation || 0)}°
+                          </span>
+                        </div>
+
+                        {/* Angle Ruler & Presets */}
+                        <div className="flex flex-col gap-1.5 w-full justify-center">
+                          <CompactRulerControl
+                            label="Angle"
+                            value={currentSelectedClipInterpolatedProps?.rotation || 0}
+                            onChange={(val) => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: val });
+                            }}
+                            onReset={() => {
+                              if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: 0 });
+                            }}
+                            min={-180}
+                            max={180}
+                            step={1}
+                            unit="°"
+                            sensitivity={0.6}
+                          />
+                          
+                          {/* Common editing preset angles */}
+                          <div className="grid grid-cols-4 gap-0.5">
+                            {[-90, 0, 90, 180].map((angle) => {
+                              const isSelected = Math.round(currentSelectedClipInterpolatedProps?.rotation || 0) === angle;
+                              return (
+                                <button
+                                  key={angle}
+                                  onClick={() => {
+                                    if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: angle });
+                                  }}
+                                  className={`py-0.5 rounded text-[8px] font-mono font-bold tracking-tighter transition-all ${
+                                    isSelected
+                                      ? "bg-indigo-600 text-white shadow border border-indigo-500/20 font-black"
+                                      : "bg-zinc-800/85 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+                                  }`}
+                                >
+                                  {angle}°
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}
@@ -4710,35 +5392,120 @@ const renderEditor = () => (
                   </div>
                 </motion.div>
               )}
-              {activeExpandedMenu === "crop" && selectedClipId && (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                  className="bg-zinc-800 rounded-xl shadow-xl border border-white/10 overflow-hidden"
-                >
-                  <div className="flex items-center gap-1 p-1.5 w-[190px]">
-                    {["None", "1:1", "16:9", "9:16", "4:3"].map((ratio) => {
-                      const currentRatio =
-                        clips.find((c) => c.id === selectedClipId)?.cropRatio || "None";
-                      return (
+              {activeExpandedMenu === "crop" && selectedClipId && (() => {
+                const selectedClip = clips.find((c) => c.id === selectedClipId);
+                const currentRatio = selectedClip?.cropRatio || "None";
+
+                const presets = [
+                  { ratio: "None", label: "FREE", subtitle: "Original", width: "24px", height: "24px", dashed: true },
+                  { ratio: "1:1", label: "1:1", subtitle: "Square", width: "22px", height: "22px", dashed: false },
+                  { ratio: "16:9", label: "16:9", subtitle: "Landscape", width: "34px", height: "19px", dashed: false },
+                  { ratio: "9:16", label: "9:16", subtitle: "Portrait", width: "16px", height: "28px", dashed: false }
+                ];
+
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex flex-col w-full h-auto shrink-0 pt-0.5 pb-2.5"
+                  >
+                    <div className="flex justify-between items-center w-full px-4 mb-2 shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <Crop size={11} className="text-zinc-400" />
+                        <span className="text-[10px] font-bold text-white/90 uppercase tracking-widest">
+                          Canvas Crop Preset
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
                         <button
-                          key={ratio}
                           onClick={() => {
-                            if (selectedClipId) {
-                               setClips(prev => prev.map(c => c.id === selectedClipId ? {...c, cropRatio: ratio === "None" ? null : ratio as any} : c));
-                            }
+                            setClips(prev => prev.map(c => c.id === selectedClipId ? {
+                              ...c,
+                              cropRatio: null,
+                              cropRect: { top: 0, right: 0, bottom: 0, left: 0 }
+                            } : c));
                           }}
-                          className={`flex-1 flex justify-center items-center px-1 py-1 rounded-lg transition-colors text-[10px] font-semibold ${currentRatio === ratio || (currentRatio === null && ratio === "None") ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white"}`}
+                          className="text-[8px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-2 py-0.5 rounded font-bold text-zinc-400 uppercase tracking-wider transition-all"
                         >
-                          {ratio}
+                          Reset
                         </button>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              )}
+                        <div className="w-px h-3 bg-zinc-700/80 mx-0.5"></div>
+                        <button
+                          onClick={() => setActiveExpandedMenu(null)}
+                          className="p-0.5 rounded-full hover:bg-white/5 transition-colors text-emerald-400"
+                        >
+                          <Check size={14} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="px-4 pb-0.5 w-full">
+                      {/* Premium Aspect Ratio Preset Strip */}
+                      <div className="grid grid-cols-4 gap-2.5 w-full">
+                        {presets.map((preset) => {
+                          const isSelected = currentRatio === preset.ratio || (currentRatio === null && preset.ratio === "None");
+                          return (
+                            <button
+                              key={preset.ratio}
+                              onClick={() => {
+                                setClips(prev => prev.map(c => c.id === selectedClipId ? {...c, cropRatio: preset.ratio === "None" ? null : preset.ratio as any} : c));
+                              }}
+                              className={`group relative flex flex-col items-center justify-between p-2.5 rounded-xl border transition-all duration-200 cursor-pointer ${
+                                isSelected
+                                  ? "bg-indigo-600/15 border-indigo-500/80 shadow-[0_0_12px_rgba(99,102,241,0.25)] text-indigo-300"
+                                  : "bg-zinc-900/50 border-white/5 text-zinc-400 hover:bg-zinc-800/80 hover:text-white hover:border-white/10"
+                              }`}
+                            >
+                              {/* Visual Aspect Ratio Box Outline with subtle label background */}
+                              <div
+                                className="w-full flex items-center justify-center bg-zinc-950/30 rounded-lg p-1.5 group-hover:scale-105 transition-transform duration-200 mb-2"
+                                style={preset.ratio === "None" ? { height: "1px", minHeight: "1px", padding: "0px" } : { minHeight: "46px" }}
+                              >
+                                {preset.ratio !== "None" && (
+                                  <div
+                                    className={`rounded-[4px] flex items-center justify-center transition-all ${
+                                      isSelected
+                                        ? "border-[2px] border-indigo-400 bg-indigo-500/10 shadow-[0_0_10px_rgba(129,140,248,0.3)]"
+                                        : "border-2 border-zinc-500 group-hover:border-zinc-400 bg-transparent"
+                                    } ${preset.dashed ? "border-dashed" : "border-solid"}`}
+                                    style={{
+                                      width: preset.width,
+                                      height: preset.height
+                                    }}
+                                  />
+                                )}
+                              </div>
+
+                              {/* Prominent Label and Subtitle */}
+                              <div className="flex flex-col items-center text-center w-full">
+                                <span className={`text-[11px] font-black tracking-tight leading-none ${
+                                  isSelected ? "text-indigo-400" : "text-white"
+                                }`}>
+                                  {preset.label}
+                                </span>
+                                <span
+                                  className="text-zinc-500 mt-1 leading-none font-medium truncate w-full group-hover:text-zinc-400 transition-colors"
+                                  style={{ fontSize: preset.ratio === "None" ? "4px" : "5px" }}
+                                >
+                                  {preset.subtitle}
+                                </span>
+                              </div>
+
+                              {/* Deep Active Glow Bar */}
+                              <div className={`absolute bottom-0 left-1/4 right-1/4 h-[2px] rounded-full transition-all duration-300 ${
+                                isSelected ? "bg-indigo-500" : "bg-transparent group-hover:bg-zinc-700"
+                              }`} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })()}
               {activeExpandedMenu === "mask" && selectedClipId && (
                 <motion.div
                   layout
@@ -4848,6 +5615,7 @@ const renderEditor = () => (
                                 onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: val }); }}
                                 onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: 60 }); }}
                                 min={5} max={100} step={1} unit="%" sensitivity={1}
+                                hideTicks
                               />
                             )}
 
@@ -4858,6 +5626,7 @@ const renderEditor = () => (
                               onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: val }); }}
                               onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: activeClip.maskType === "half" ? 50 : 60 }); }}
                               min={activeClip.maskType === "half" ? 0 : 5} max={100} step={1} unit="%" sensitivity={1}
+                              hideTicks
                             />
 
                             {/* Corner Roundness (Square only) */}
@@ -4868,17 +5637,9 @@ const renderEditor = () => (
                                 onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: val }); }}
                                 onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: 15 }); }}
                                 min={0} max={100} step={1} unit="px" sensitivity={1}
+                                hideTicks
                               />
                             )}
-
-                            {/* Scale Slider */}
-                            <CompactRulerControl
-                              label="Scale"
-                              value={activeClip.maskScale ?? 1}
-                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: val }); }}
-                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: 1 }); }}
-                              min={0.1} max={3} step={0.01} unit="x" sensitivity={0.02}
-                            />
 
                             {/* Feather Slider */}
                             <CompactRulerControl
@@ -4887,6 +5648,7 @@ const renderEditor = () => (
                               onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: val }); }}
                               onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: 0 }); }}
                               min={0} max={200} step={1} unit="px" sensitivity={1}
+                              hideTicks
                             />
 
                             {/* Expansion Slider */}
@@ -4896,6 +5658,7 @@ const renderEditor = () => (
                               onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: val }); }}
                               onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: 0 }); }}
                               min={-200} max={200} step={1} unit="px" sensitivity={1}
+                              hideTicks
                             />
                           </div>
                         )}
@@ -5014,9 +5777,33 @@ const renderEditor = () => (
                     case 'stabilize': return (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? (activeExpandedMenu === "stabilize" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "stabilize" ? null : "stabilize")}><Activity size={16} /></motion.button>
                     );
-                    case 'copy': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId} onClick={handleCopy}><Copy size={16} /></motion.button>
-                    );
+                    case 'copy': {
+                      const isOptionActive = multiSelectActive;
+                      return (
+                        <motion.button
+                          key={key}
+                          layout
+                          className={`p-1.5 shrink-0 rounded-full transition-all duration-300 snap-start flex items-center justify-center relative touch-none ${
+                            isOptionActive 
+                              ? "bg-indigo-600/30 text-indigo-300 border border-indigo-500/50 shadow-[0_0_12px_rgba(99,102,241,0.5)]" 
+                              : (selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-45 text-zinc-400 hover:text-white")
+                          }`}
+                          onPointerDown={onCopyPointerDown}
+                          onPointerUp={onCopyPointerUp}
+                          onPointerLeave={onCopyPointerLeave}
+                          style={{ touchAction: "none" }}
+                          title="Press & Hold to toggle Multi-Select"
+                        >
+                          <Copy size={16} />
+                          {isOptionActive && (
+                            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                            </span>
+                          )}
+                        </motion.button>
+                      );
+                    }
                     case 'extract-audio': return (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={handleExtractAudio}><Music size={16} /></motion.button>
                     );
@@ -5089,9 +5876,240 @@ const renderEditor = () => (
                 </div>
               </motion.div>
             )}
-          </AnimatePresence>
+      </AnimatePresence>
+
+      {/* Multi-Select Action Dock */}
+      <AnimatePresence>
+        {multiSelectActive && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.9 }}
+            transition={{ type: "spring", damping: 25, stiffness: 350 }}
+            className="fixed bottom-[115px] left-1/2 -translate-x-1/2 w-[340px] xs:w-[370px] bg-[#1d1d20]/95 backdrop-blur-md rounded-2xl p-3 border border-indigo-500/20 shadow-[0_20px_50px_rgba(0,0,0,0.7)] z-[250]"
+          >
+            {/* Header */}
+            <div className="flex justify-between items-center pb-2 border-b border-white/5 mb-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded-md bg-indigo-500/10 text-indigo-400">
+                  <Layers size={14} className="animate-pulse" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[11px] font-bold text-white uppercase tracking-wider">Multi-Select Mode</span>
+                  <span className="text-[9px] font-mono text-indigo-300">
+                    {selectedClipIds.length} {selectedClipIds.length === 1 ? 'layer' : 'layers'} selected
+                  </span>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setMultiSelectActive(false);
+                  setSelectedClipIds([]);
+                  setToastMessage("Multi-Select Deactivated");
+                  setTimeout(() => setToastMessage(null), 2000);
+                }} 
+                className="text-zinc-500 hover:text-white p-1 bg-white/5 hover:bg-white/10 rounded-full transition-colors animate-fade-in"
+                title="Deactivate Multi-Select"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Instruction Banner */}
+            {selectedClipIds.length === 0 && (
+              <div className="text-[10px] text-zinc-400 bg-white/5 p-2 rounded-lg text-center mb-2 leading-relaxed">
+                Tap layers in the timeline to multi-select. Drag or Delete them together.
+              </div>
+            )}
+
+            {/* Actions Grid */}
+            <div className="grid grid-cols-5 gap-1">
+              {/* Delete Active Button */}
+              <button
+                disabled={selectedClipIds.length === 0}
+                onClick={deleteSelectedClip}
+                className={`col-span-1 p-1 h-[52px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all duration-200 ${
+                  selectedClipIds.length > 0 
+                    ? "bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 active:scale-95 cursor-pointer shadow-[0_4px_12px_rgba(239,68,68,0.15)]" 
+                    : "opacity-35 bg-white/5 text-zinc-500 border border-transparent cursor-not-allowed"
+                }`}
+              >
+                <Trash2 size={13} />
+                <span className="text-[8px] font-semibold font-sans text-center">Delete</span>
+              </button>
+
+              {/* Paste Settings (Coming Soon) */}
+              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
+                <Copy size={12} className="text-zinc-400" />
+                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Paste</span>
+                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
+              </div>
+
+              {/* Compound Clip (Coming Soon) */}
+              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
+                <SquareDashed size={12} className="text-zinc-400" />
+                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Compound</span>
+                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
+              </div>
+
+              {/* Group Layers (Coming Soon) */}
+              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
+                <Layers size={12} className="text-zinc-400" />
+                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Group</span>
+                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
+              </div>
+
+              {/* Link/Attach Layers (Coming Soon) */}
+              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
+                <Link2 size={12} className="text-zinc-400" />
+                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center flex-wrap">Link</span>
+                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
         </>
       )}
+
+      {/* Dynamic Transition Settings Modal */}
+      <AnimatePresence>
+        {transitionModal && (() => {
+          const prevClip = clips.find(c => c.id === transitionModal.prevClipId);
+          const currentClip = clips.find(c => c.id === transitionModal.currentClipId);
+          if (!prevClip || !currentClip) return null;
+
+          const isAudioOnly = prevClip.type === "audio" && currentClip.type === "audio";
+          const maxAllowedDuration = Math.min(3, Math.min(prevClip.durationSeconds, currentClip.durationSeconds) / 2);
+
+          const transitionOptions = isAudioOnly
+            ? [{ id: "crossfade", name: "Crossfade", desc: "Smooth dynamic volume blending" }]
+            : [
+                { id: "crossfade", name: "Crossfade", desc: "Classic smooth opacity dissolve" },
+                { id: "blur", name: "Blur Dissolve", desc: "Fade with beautiful Gaussian blur" },
+                { id: "slide-left", name: "Slide Left", desc: "Translate incoming clip from right" },
+                { id: "slide-right", name: "Slide Right", desc: "Translate incoming clip from left" },
+                { id: "wipe-left", name: "Wipe Left", desc: "Geometric sliding reveal from right" },
+                { id: "wipe-right", name: "Wipe Right", desc: "Geometric sliding reveal from left" },
+                { id: "zoom-in", name: "Zoom In", desc: "Incoming scale magnification" },
+              ];
+
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 h-full w-full"
+              onClick={() => setTransitionModal(null)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, y: 15 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.95, y: 15 }}
+                className="bg-[#1b1b1e] border border-white/10 rounded-2xl w-full max-w-[340px] sm:max-w-[380px] p-5 shadow-2xl relative text-left"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h3 className="text-white text-sm font-bold font-sans tracking-wide">Transition Settings</h3>
+                    <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mt-0.5">
+                      {prevClip.type} + {currentClip.type}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setTransitionModal(null)}
+                    className="w-6 h-6 rounded-full bg-zinc-850 hover:bg-zinc-700 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+
+                {/* Transition Type Options */}
+                <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block mb-2">Style</span>
+                <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 mb-4 scrollbar-thin scrollbar-thumb-zinc-805">
+                  {transitionOptions.map((opt) => {
+                    const isSelected = transitionModal.type === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setTransitionModal({ ...transitionModal, type: opt.id })}
+                        className={`w-full text-left p-2 rounded-xl border transition-all flex items-start gap-2.5 cursor-pointer ${
+                          isSelected
+                            ? "bg-indigo-500/10 border-indigo-500/50 text-white"
+                            : "bg-zinc-900/40 border-white/5 hover:border-white/15 text-zinc-300 hover:bg-zinc-900/80"
+                        }`}
+                      >
+                        <div className={`w-3.5 h-3.5 mt-0.5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? "border-indigo-400" : "border-zinc-650"}`}>
+                          {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />}
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold leading-none">{opt.name}</div>
+                          <div className="text-[9px] text-zinc-500 mt-1">{opt.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Duration Slider */}
+                <div className="mb-5 bg-zinc-900/40 border border-white/5 p-3 rounded-xl">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Duration</span>
+                    <span className="text-xs font-mono font-bold text-white bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/20">
+                      {transitionModal.duration.toFixed(2)}s
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max={maxAllowedDuration.toFixed(2)}
+                    step="0.05"
+                    value={transitionModal.duration}
+                    onChange={(e) => setTransitionModal({ ...transitionModal, duration: parseFloat(e.target.value) })}
+                    className="w-full accent-indigo-500 h-1 bg-zinc-800 rounded-lg outline-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[8px] text-zinc-500 mt-1 font-semibold">
+                    <span>Min: 0.1s</span>
+                    <span>Max: {maxAllowedDuration.toFixed(2)}s</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2 justify-end">
+                  {currentClip.transition && (
+                    <button
+                      onClick={() => {
+                        removeTransition(transitionModal.currentClipId);
+                        setTransitionModal(null);
+                      }}
+                      className="px-3 py-1.5 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 hover:bg-red-500/15 font-sans font-semibold text-xs active:scale-95 transition-all cursor-pointer mr-auto"
+                    >
+                      Remove
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setTransitionModal(null)}
+                    className="px-3 py-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 font-sans font-semibold text-xs cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      addTransition(transitionModal.currentClipId, transitionModal.type, transitionModal.duration);
+                      setTransitionModal(null);
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-sans font-semibold text-xs cursor-pointer active:scale-95 transition-all shadow-md shadow-indigo-500/20"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
 
       {/* Pill Toast Notification */}
       <AnimatePresence>

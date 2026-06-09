@@ -11,6 +11,7 @@ export function VideoRenderer({
   className,
   onPointerDown,
   onError,
+  volumeMultiplier = 1,
 }: {
   id?: string;
   clip: Clip;
@@ -21,6 +22,7 @@ export function VideoRenderer({
   className?: string;
   onPointerDown?: (e: React.PointerEvent) => void;
   onError?: () => void;
+  volumeMultiplier?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -28,7 +30,7 @@ export function VideoRenderer({
     const video = videoRef.current;
     if (!video) return;
 
-    video.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
+    video.volume = (typeof clip.volume === "number" ? clip.volume / 100 : 1) * volumeMultiplier;
     const effectiveSpeed = clip.opticalFlow ? 1 : (clip.speed || 1);
     video.playbackRate = effectiveSpeed;
 
@@ -66,6 +68,7 @@ export function VideoRenderer({
     clip.trimStartSeconds,
     clip.volume,
     clip.speed,
+    volumeMultiplier,
   ]);
 
   return (
@@ -90,12 +93,14 @@ export function AudioRenderer({
   isPlaying,
   isMuted,
   onError,
+  volumeMultiplier = 1,
 }: {
   clip: Clip;
   currentTime: number;
   isPlaying: boolean;
   isMuted: boolean;
   onError?: () => void;
+  volumeMultiplier?: number;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -103,7 +108,7 @@ export function AudioRenderer({
     const audio = audioRef.current;
     if (!audio) return;
 
-    audio.volume = typeof clip.volume === "number" ? clip.volume / 100 : 1;
+    audio.volume = (typeof clip.volume === "number" ? clip.volume / 100 : 1) * volumeMultiplier;
     const effectiveSpeed = clip.opticalFlow ? 1 : (clip.speed || 1);
     audio.playbackRate = effectiveSpeed;
 
@@ -141,6 +146,7 @@ export function AudioRenderer({
     clip.trimStartSeconds,
     clip.volume,
     clip.speed,
+    volumeMultiplier,
   ]);
 
   return (

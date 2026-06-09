@@ -5,6 +5,7 @@ export type Layer = {
   order: number; // For Up/Down sorting. Lower = deeper layer, Higher = top layer.
   isMuted: boolean;
   isHidden: boolean;
+  isLocked?: boolean;
   name?: string;
 };
 
@@ -107,6 +108,10 @@ export type Clip = {
   cropRect?: { top: number, right: number, bottom: number, left: number };
   mixBlendMode?: "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light" | "difference" | "exclusion" | "hue" | "saturation" | "color" | "luminosity";
   keyframes?: Keyframe[];
+  transition?: {
+    type: string;
+    duration: number;
+  };
 };
 
 export type Project = {

@@ -10,6 +10,3 @@ project(':capacitor-splash-screen').projectDir = new File('../node_modules/@capa
 
 include ':capacitor-status-bar'
 project(':capacitor-status-bar').projectDir = new File('../node_modules/@capacitor/status-bar/android')
-
-include ':richardaware74-capacitor-ffmpeg-kit'
-project(':richardaware74-capacitor-ffmpeg-kit').projectDir = new File('../node_modules/@richardaware74/capacitor-ffmpeg-kit/android')

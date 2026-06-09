@@ -10,9 +10,5 @@
 	{
 		"pkg": "@capacitor/status-bar",
 		"classpath": "com.capacitorjs.plugins.statusbar.StatusBarPlugin"
-	},
-	{
-		"pkg": "@richardaware74/capacitor-ffmpeg-kit",
-		"classpath": "com.richardaware74.capacitorffmpegkit.FFmpegKitPluginPlugin"
 	}
 ]

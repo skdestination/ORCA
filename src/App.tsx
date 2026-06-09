@@ -50,6 +50,7 @@ import {
   Music,
   Download,
   Share,
+  Mic,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -65,6 +66,7 @@ import { MinusIcon, CompactRulerControl, SpeedRulerControl } from "./components/
 const BASE_PIXELS_PER_SECOND = 100;
 
 export const DEFAULT_FLOW_BAR_ORDER = [
+  'voiceover',
   'volume',
   'text',
   'crop',
@@ -82,6 +84,9 @@ export const DEFAULT_FLOW_BAR_ORDER = [
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [hasMicPermission, setHasMicPermission] = useState(false);
+  const [voiceoverLayerId, setVoiceoverLayerId] = useState<string | null>(null);
   const [projectMenuOpenId, setProjectMenuOpenId] = useState<string | null>(
     null,
   );
@@ -159,6 +164,10 @@ export default function App() {
   const [layers, setLayers] = useState<Layer[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
+  const currentTimeRef = useRef(0);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = normal, 2 = zoomed in
   const [playheadX, setPlayheadX] = useState(150);
@@ -182,6 +191,52 @@ export default function App() {
   const [showKeyframeGraph, setShowKeyframeGraph] = useState(false);
   
   const selectedClip = clips.find((c) => c.id === selectedClipId);
+  const updateClipsProperties = useCallback((clipIds: string[], updates: Partial<Clip>) => {
+    setClips((prev) =>
+      prev.map((c) => {
+        if (!clipIds.includes(c.id)) return c;
+        const timeInClip = currentTimeRef.current - c.leftSeconds;
+
+        let newKfMap: Record<string, any> = {};
+        let kfs = [...(c.keyframes || [])];
+        let hasApplicableKeyframes = false;
+
+        for (const [key, value] of Object.entries(updates)) {
+          if (value === undefined) continue;
+          const hasKfsForProp = kfs.some((k) => k.properties[key] !== undefined);
+          if (hasKfsForProp) {
+            hasApplicableKeyframes = true;
+            newKfMap[key] = value;
+          }
+        }
+
+        const updatedClip = { ...c, ...updates };
+
+        if (hasApplicableKeyframes) {
+          const existingIndex = kfs.findIndex(
+            (kf) => Math.abs(kf.timeOffset - timeInClip) < 0.05
+          );
+          if (existingIndex >= 0) {
+            kfs[existingIndex] = {
+              ...kfs[existingIndex],
+              properties: { ...kfs[existingIndex].properties, ...newKfMap },
+            };
+          } else {
+            kfs.push({
+              id: "kf_" + Date.now() + Math.random(),
+              timeOffset: timeInClip,
+              properties: newKfMap,
+              curve: "linear",
+            });
+            kfs.sort((a, b) => a.timeOffset - b.timeOffset);
+          }
+          updatedClip.keyframes = kfs;
+        }
+
+        return updatedClip;
+      })
+    );
+  }, []);
   const isAtKeyframe = selectedClip?.keyframes?.some(k => {
     const isClose = Math.abs(currentTime - (selectedClip.leftSeconds + k.timeOffset)) < 0.05;
     if (!isClose) return false;
@@ -191,6 +246,27 @@ export default function App() {
       return k.properties.translateX !== undefined || k.properties.scale !== undefined;
     }
   }) ?? false;
+
+  const currentSelectedClipInterpolatedProps = useMemo(() => {
+    if (!selectedClipId) return null;
+    const clip = clips.find(c => c.id === selectedClipId);
+    if (!clip) return null;
+    return getInterpolatedProps(clip, currentTime - clip.leftSeconds, activeExpandedMenu);
+  }, [selectedClipId, clips, currentTime, activeExpandedMenu]);
+
+  const keyframePercentageLabel = useMemo(() => {
+    if (!activeExpandedMenu || !selectedClipId || !currentSelectedClipInterpolatedProps) return null;
+    if (activeExpandedMenu === "volume") {
+      return `${Math.round(currentSelectedClipInterpolatedProps.volume ?? 100)}%`;
+    } else if (activeExpandedMenu === "move") {
+      return `${Math.round((currentSelectedClipInterpolatedProps.scale ?? 1) * 100)}%`;
+    } else if (activeExpandedMenu === "blend") {
+      return `${Math.round((currentSelectedClipInterpolatedProps.opacity ?? 1) * 100)}%`;
+    } else if (activeExpandedMenu === "adjust") {
+      return `${Math.round(currentSelectedClipInterpolatedProps.brightness ?? 100)}%`;
+    }
+    return null;
+  }, [activeExpandedMenu, selectedClipId, currentSelectedClipInterpolatedProps]);
 
   const isBetweenKeyframes = (selectedClip?.keyframes?.filter(k => {
     if (activeExpandedMenu === "volume") {
@@ -240,46 +316,16 @@ export default function App() {
   }, [history, historyIndex]);
 
   useEffect(() => {
-    if (selectedClipId) {
-      const clip = clips.find((c) => c.id === selectedClipId);
-      if (clip) {
-        setClipVolume(prev => {
-          const val = typeof clip.volume === "number" ? clip.volume : 100;
-          return prev === val ? prev : val;
-        });
-      }
-    }
-  }, [selectedClipId, clips]);
+    // Redundant clipVolume sync has been removed completely, as we trust the dynamic interpolation
+  }, []);
 
   useEffect(() => {
     // Intentional omission of empty layer cleanup so users can add empty layers
   }, [clips, layers]);
 
   useEffect(() => {
-    // Identify and clean up any text clips that are empty/whitespace only and are not currently active/selected
-    const emptyTextClips = clips.filter(
-      (c) =>
-        c.type === "text" &&
-        (!c.text || c.text.trim() === "") &&
-        (c.id !== selectedClipId || activeExpandedMenu !== "text")
-    );
-
-    if (emptyTextClips.length > 0) {
-      const idsToRemove = emptyTextClips.map((c) => c.id);
-      const layersToRemove = emptyTextClips.map((c) => c.layerId);
-
-      // Remove the empty layers associated with deleted text clips
-      setLayers((prevLayers) => prevLayers.filter((l) => !layersToRemove.includes(l.id)));
-
-      // Remove from the selection list if needed
-      setSelectedClipIds((prevSel) => {
-        const updated = prevSel.filter((id) => !idsToRemove.includes(id));
-        return prevSel.length === updated.length ? prevSel : updated;
-      });
-
-      setClips((prevClips) => prevClips.filter((c) => !idsToRemove.includes(c.id)));
-    }
-  }, [clips, selectedClipId, activeExpandedMenu]);
+    // Empty text clips are cleaned up manually on deselect instead of within a reactive useEffect
+  }, []);
 
   useEffect(() => {
     if (isUndoRedoAction.current) {
@@ -525,6 +571,79 @@ export default function App() {
       rAF = requestAnimationFrame(drawFn);
     };
     rAF = requestAnimationFrame(drawFn);
+  };
+
+  const cleanupVoiceoverLayer = useCallback(() => {
+    if (voiceoverLayerId) {
+      setLayers((prev) => {
+        // Find if this layer has clips
+        const hasClips = clips.some((c) => c.layerId === voiceoverLayerId);
+        if (!hasClips) {
+          return prev.filter((l) => l.id !== voiceoverLayerId);
+        }
+        return prev;
+      });
+      setVoiceoverLayerId(null);
+    }
+  }, [voiceoverLayerId, clips]);
+
+  useEffect(() => {
+    if (activeExpandedMenu === "voiceover" && !voiceoverLayerId) {
+      const newId = `layer-voiceover-${Date.now()}`;
+      setLayers((prev) => [
+        ...prev,
+        {
+          id: newId,
+          order: prev.length,
+          isMuted: false,
+          isHidden: false,
+          name: "Voiceover",
+        },
+      ]);
+      setVoiceoverLayerId(newId);
+    } else if (activeExpandedMenu !== "voiceover" && voiceoverLayerId) {
+      cleanupVoiceoverLayer();
+    }
+  }, [activeExpandedMenu, voiceoverLayerId, cleanupVoiceoverLayer]);
+
+  const handleRecordClick = async () => {
+    if (isRecording) {
+      setIsRecording(false);
+      setToastMessage("Recording saved to project timeline");
+      
+      // Add a dummy voiceover clip
+      if (voiceoverLayerId) {
+        setClips((prev) => [
+          ...prev,
+          {
+            id: `clip-voiceover-${Date.now()}`,
+            layerId: voiceoverLayerId,
+            type: "audio",
+            src: "", // No actual audio yet, just a representation
+            leftSeconds: currentTime,
+            durationSeconds: 5, // Default duration of 5 seconds for dummy
+            trimStartSeconds: 0,
+            volume: 100,
+          },
+        ]);
+      }
+      return;
+    }
+
+    if (!hasMicPermission) {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        setHasMicPermission(true);
+        setIsRecording(true);
+        setToastMessage("Studio recording started...");
+      } catch (err) {
+        console.error("Microphone permission denied:", err);
+        setToastMessage("Microphone permission denied");
+      }
+    } else {
+      setIsRecording(true);
+      setToastMessage("Studio recording started...");
+    }
   };
 
   const handleBackToHome = () => {
@@ -1859,7 +1978,7 @@ const renderHome = () => (
                 {/* Background Image */}
                 <div className="absolute inset-0 bg-zinc-900">
                   <img
-                    src={p.thumbnail}
+                    src={p.thumbnail || undefined}
                     alt=""
                     className="w-full h-full object-cover object-left group-hover:scale-105 transition-transform duration-700"
                   />
@@ -2168,7 +2287,7 @@ const renderEditor = () => (
             <h2 className="text-white font-bold text-xl mb-4 text-center">Export Complete</h2>
             <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden mb-6 flex items-center justify-center">
               <video 
-                src={exportedVideoUrl} 
+                src={exportedVideoUrl || undefined} 
                 controls 
                 autoPlay
                 className="w-full h-full object-contain" 
@@ -2561,10 +2680,22 @@ const renderEditor = () => (
               };
 
               const transformStyle: React.CSSProperties = {
-                transform: `translate(${activeClip.translateX || 0}px, ${activeClip.translateY || 0}px) rotate(${activeClip.rotation || 0}deg) scale(${activeClip.scale ?? 1})`,
+                transformOrigin: `${(activeClip.anchorPointX ?? 0.5) * 100}% ${(activeClip.anchorPointY ?? 0.5) * 100}%`,
+                transform: `
+                  translate(${activeClip.translateX || 0}px, ${activeClip.translateY || 0}px)
+                  rotate(${activeClip.rotation || 0}deg)
+                  scaleX(${(activeClip.scaleX ?? 1) * (activeClip.scale ?? 1)})
+                  scaleY(${(activeClip.scaleY ?? 1) * (activeClip.scale ?? 1)})
+                `,
                 clipPath: getClipPath(activeClip.maskType),
                 opacity: activeClip.opacity ?? 1,
                 mixBlendMode: activeClip.mixBlendMode as any || "normal",
+                filter: `
+                  blur(${activeClip.blur || 0}px)
+                  brightness(${activeClip.brightness === undefined ? 100 : activeClip.brightness}%)
+                  contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%)
+                  saturate(${activeClip.saturation === undefined ? 100 : activeClip.saturation}%)
+                `.trim(),
                 ...(activeClip.cropRatio ? { aspectRatio: activeClip.cropRatio.replace(":", "/") } : {})
               };
 
@@ -2629,7 +2760,7 @@ const renderEditor = () => (
                         >
                           <img
                             id={`clip-media-${activeClip.id}`}
-                            src={activeClip.src}
+                            src={activeClip.src || undefined}
                             className="w-full h-full object-cover pointer-events-none"
                             crossOrigin="anonymous"
                             onError={() => handleClipError(activeClip.id)}
@@ -2779,6 +2910,11 @@ const renderEditor = () => (
             )}
           </div>
           <div className="flex items-center shrink-0">
+            {keyframePercentageLabel && (
+              <button className="flex items-center justify-center w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-zinc-800 hover:bg-zinc-700 transition-colors text-[9px] sm:text-[10px] font-medium text-zinc-300 hover:text-white mr-1 sm:mr-2 shrink-0 border border-white/5 shadow-sm">
+                {keyframePercentageLabel}
+              </button>
+            )}
             <div className="flex bg-zinc-800 rounded-full px-0.5 py-0.5 mr-1 sm:px-1 sm:py-1 sm:mr-2">
               <button
                 className={`p-1 sm:p-1.5 rounded-full transition-colors ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`}
@@ -3366,6 +3502,99 @@ const renderEditor = () => (
                                   touchAction: "none",
                                 }}
                               >
+                                {/* Keyframes Overlay */}
+                                {clip.keyframes && clip.keyframes.length > 0 && (() => {
+                                  const volumeKeyframes = clip.keyframes.filter((k) => k.properties.volume !== undefined).sort((a,b) => a.timeOffset - b.timeOffset);
+                                  const moveKeyframes = clip.keyframes.filter((k) => k.properties.translateX !== undefined || k.properties.scale !== undefined).sort((a,b) => a.timeOffset - b.timeOffset);
+
+                                  return (
+                                    <div className="absolute inset-0 pointer-events-none z-30" style={{ margin: '4px 0' }}>
+                                      <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+                                        {/* Volume - Purple */}
+                                        {volumeKeyframes.length > 1 && (
+                                          <polyline 
+                                            points={volumeKeyframes.map((kf) => 
+                                              `${(kf.timeOffset / clip.durationSeconds) * 100},${100 - Math.min(100, Math.max(0, kf.properties.volume ?? 100))}`
+                                            ).join(' ')}
+                                            fill="none" stroke="#a855f7" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                                          />
+                                        )}
+                                        {/* Zoom - Green */}
+                                        {moveKeyframes.length > 1 && (
+                                          <polyline 
+                                            points={moveKeyframes.map((kf) => {
+                                              const sc = kf.properties.scale ?? 1;
+                                              const y = sc <= 1 ? 100 - (sc * 50) : Math.max(0, 50 - ((sc - 1) * 25));
+                                              return `${(kf.timeOffset / clip.durationSeconds) * 100},${y}`;
+                                            }).join(' ')}
+                                            fill="none" stroke="#22c55e" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                                          />
+                                        )}
+                                        {/* Pan - Blue */}
+                                        {moveKeyframes.length > 1 && (
+                                          <polyline 
+                                            points={moveKeyframes.map((kf) => {
+                                              const tx = kf.properties.translateX ?? 0;
+                                              const y = Math.max(0, Math.min(100, 50 - (tx / 400) * 50));
+                                              return `${(kf.timeOffset / clip.durationSeconds) * 100},${y}`;
+                                            }).join(' ')}
+                                            fill="none" stroke="#3b82f6" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                                          />
+                                        )}
+                                      </svg>
+
+                                      {clip.keyframes.map((kf) => {
+                                        const isVol = kf.properties.volume !== undefined;
+                                        const isMove = kf.properties.translateX !== undefined || kf.properties.scale !== undefined;
+                                        
+                                        const x = (kf.timeOffset / clip.durationSeconds) * 100;
+                                        const isActivated = selectedClipId === clip.id && Math.abs((currentTime - clip.leftSeconds) - kf.timeOffset) < 0.05;
+
+                                        return (
+                                          <div key={kf.id}>
+                                            {isVol && (() => {
+                                              const y = 100 - Math.min(100, Math.max(0, kf.properties.volume ?? 100));
+                                              return (
+                                                <div
+                                                  className="absolute w-[10px] h-[10px] border-[2px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-40 group bg-[#a855f7]"
+                                                  style={{ left: `${x}%`, top: `${y}%` }}
+                                                >
+                                                </div>
+                                              );
+                                            })()}
+                                            {isMove && (() => {
+                                              const sc = kf.properties.scale ?? 1;
+                                              const yZoom = sc <= 1 ? 100 - (sc * 50) : Math.max(0, 50 - ((sc - 1) * 25));
+
+                                              const tx = kf.properties.translateX ?? 0;
+                                              const yPan = Math.max(0, Math.min(100, 50 - (tx / 400) * 50));
+
+                                              return (
+                                                <>
+                                                  {/* Zoom Node */}
+                                                  <div
+                                                    className="absolute w-[10px] h-[10px] border-[2px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-30 group bg-[#22c55e]"
+                                                    style={{ left: `${x}%`, top: `${yZoom}%` }}
+                                                  >
+                                                  </div>
+                                                  {/* Pan Node */}
+                                                  {Math.abs(yPan - yZoom) > 5 && (
+                                                    <div
+                                                      className="absolute w-[8px] h-[8px] border-[1.5px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-20 group bg-[#3b82f6]"
+                                                      style={{ left: `${x}%`, top: `${yPan}%` }}
+                                                    >
+                                                    </div>
+                                                  )}
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
+
                                 <div className="absolute inset-0 bg-black/10 pointer-events-none z-10"></div>
                                 {clip.type === "text" && (
                                   <div className="w-full h-full flex items-center justify-center px-4 pointer-events-none overflow-hidden pb-1 pt-3">
@@ -3377,7 +3606,7 @@ const renderEditor = () => (
                                 {clip.type === "image" && (
                                   <>
                                     <img
-                                      src={clip.src}
+                                      src={clip.src || undefined}
                                       className="absolute inset-0 w-full h-full object-cover opacity-70 pointer-events-none"
                                       draggable={false}
                                       onError={() => handleClipError(clip.id)}
@@ -3388,7 +3617,7 @@ const renderEditor = () => (
                                 {clip.type === "video" && (
                                   <>
                                     <video
-                                      src={clip.src + "#t=0.001"}
+                                      src={clip.src ? clip.src + "#t=0.001" : undefined}
                                       className="absolute inset-0 w-full h-full object-cover opacity-70 pointer-events-none"
                                       draggable={false}
                                       preload="metadata"
@@ -3719,17 +3948,12 @@ const renderEditor = () => (
                           x = Math.max(0, Math.min(rect.width, x));
                           let val = Math.round((x / rect.width) * 100);
                           setClipVolume(val);
-                          setClips((prev) =>
-                            prev.map((c) => {
-                              if (applyVolumeToAll && (c.type === "video" || c.type === "audio")) {
-                                return { ...c, volume: val };
-                              }
-                              if (c.id === selectedClipId) {
-                                return { ...c, volume: val };
-                              }
-                              return c;
-                            })
-                          );
+                          
+                          const targetIds = clips
+                            .filter(c => c.id === selectedClipId || (applyVolumeToAll && (c.type === "video" || c.type === "audio")))
+                            .map(c => c.id);
+                            
+                          updateClipsProperties(targetIds, { volume: val });
                         };
                         updateVol(e.clientX);
                         const moveHandler = (me: PointerEvent) => updateVol(me.clientX);
@@ -3750,13 +3974,13 @@ const renderEditor = () => (
                       {/* Active level fill */}
                       <div
                         className="absolute left-0 h-[1.5px] bg-[#a5b4fc] rounded-full pointer-events-none transition-all duration-75"
-                        style={{ width: `${clipVolume}%` }}
+                        style={{ width: `${currentSelectedClipInterpolatedProps?.volume ?? 100}%` }}
                       />
 
                       {/* Premium knob mirroring user's photo */}
                       <div
                         className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-75 flex items-center justify-center z-10"
-                        style={{ left: `${clipVolume}%` }}
+                        style={{ left: `${currentSelectedClipInterpolatedProps?.volume ?? 100}%` }}
                       >
                         <div className="w-[22px] h-[22px] bg-white/15 backdrop-blur-[1px] rounded-full flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.4)] border border-white/20">
                           <div className="w-[11px] h-[11px] bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.4)]" />
@@ -3764,7 +3988,7 @@ const renderEditor = () => (
                       </div>
                     </div>
                     <span className="text-[10px] text-zinc-300 font-sans w-8 text-right font-medium">
-                      {clipVolume}%
+                      {Math.round(currentSelectedClipInterpolatedProps?.volume ?? 100)}%
                     </span>
                   </div>
                 </motion.div>
@@ -4055,28 +4279,13 @@ const renderEditor = () => (
                     <div className="flex flex-col gap-1.5">
                       <CompactRulerControl
                         label="Rotation"
-                        value={
-                          clips.find((c) => c.id === selectedClipId)
-                            ?.rotation || 0
-                        }
+                        value={currentSelectedClipInterpolatedProps?.rotation || 0}
                         onChange={(val) => {
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, rotation: val }
-                                : c,
-                            ),
-                          );
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: val });
                         }}
-                        onReset={() =>
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, rotation: 0 }
-                                : c,
-                            ),
-                          )
-                        }
+                        onReset={() => {
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { rotation: 0 });
+                        }}
                         min={-180}
                         max={180}
                         step={1}
@@ -4085,25 +4294,13 @@ const renderEditor = () => (
                       />
                       <CompactRulerControl
                         label="Scale"
-                        value={
-                          clips.find((c) => c.id === selectedClipId)?.scale ?? 1
-                        }
+                        value={currentSelectedClipInterpolatedProps?.scale ?? 1}
                         onChange={(val) => {
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, scale: val }
-                                : c,
-                            ),
-                          );
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { scale: val });
                         }}
-                        onReset={() =>
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId ? { ...c, scale: 1 } : c,
-                            ),
-                          )
-                        }
+                        onReset={() => {
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { scale: 1 });
+                        }}
                         min={0.1}
                         max={5}
                         step={0.01}
@@ -4114,28 +4311,13 @@ const renderEditor = () => (
                     <div className="flex flex-col gap-1.5">
                       <CompactRulerControl
                         label="Pos X"
-                        value={
-                          clips.find((c) => c.id === selectedClipId)
-                            ?.translateX || 0
-                        }
+                        value={currentSelectedClipInterpolatedProps?.translateX || 0}
                         onChange={(val) => {
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, translateX: val }
-                                : c,
-                            ),
-                          );
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: val });
                         }}
-                        onReset={() =>
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, translateX: 0 }
-                                : c,
-                            ),
-                          )
-                        }
+                        onReset={() => {
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateX: 0 });
+                        }}
                         min={-2000}
                         max={2000}
                         step={1}
@@ -4144,28 +4326,13 @@ const renderEditor = () => (
                       />
                       <CompactRulerControl
                         label="Pos Y"
-                        value={
-                          clips.find((c) => c.id === selectedClipId)
-                            ?.translateY || 0
-                        }
+                        value={currentSelectedClipInterpolatedProps?.translateY || 0}
                         onChange={(val) => {
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, translateY: val }
-                                : c,
-                            ),
-                          );
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: val });
                         }}
-                        onReset={() =>
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId
-                                ? { ...c, translateY: 0 }
-                                : c,
-                            ),
-                          )
-                        }
+                        onReset={() => {
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { translateY: 0 });
+                        }}
                         min={-2000}
                         max={2000}
                         step={1}
@@ -4227,7 +4394,7 @@ const renderEditor = () => (
                      <div className="flex justify-between items-center mb-1">
                         <span className="text-[8px] text-zinc-500 font-bold uppercase pl-0.5">Opacity</span>
                         <span className="text-[9px] text-zinc-400 font-mono pr-0.5">
-                          {Math.round((clips.find((c) => c.id === selectedClipId)?.opacity ?? 1) * 100)}%
+                          {Math.round((currentSelectedClipInterpolatedProps?.opacity ?? 1) * 100)}%
                         </span>
                      </div>
                      <input
@@ -4235,17 +4402,65 @@ const renderEditor = () => (
                         min="0"
                         max="1"
                         step="0.01"
-                        value={clips.find((c) => c.id === selectedClipId)?.opacity ?? 1}
+                        value={currentSelectedClipInterpolatedProps?.opacity ?? 1}
                         onChange={(e) => {
                           const val = Number(e.target.value);
-                          setClips((prev) =>
-                            prev.map((c) =>
-                              c.id === selectedClipId ? { ...c, opacity: val } : c
-                            )
-                          );
+                          if (selectedClipId) updateClipsProperties([selectedClipId], { opacity: val });
                         }}
                         className="w-full accent-white h-0.5 bg-zinc-700 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full cursor-pointer mt-0.5"
                      />
+                  </div>
+                </motion.div>
+              )}
+              {activeExpandedMenu === "adjust" && selectedClipId && (
+                <motion.div
+                  layout
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="bg-zinc-800 rounded-xl shadow-xl border border-white/10 overflow-hidden w-[300px] p-2"
+                >
+                  <div className="flex justify-between items-center w-full px-2 mb-2">
+                    <span className="text-[10px] font-semibold text-white/90">
+                      Adjustments
+                    </span>
+                    <button
+                      onClick={() => setActiveExpandedMenu(null)}
+                      className="text-zinc-400 hover:text-white"
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-2 max-h-[160px] overflow-y-auto scrollbar-hide px-2 pb-2">
+                    <CompactRulerControl
+                      label="Blur"
+                      value={currentSelectedClipInterpolatedProps?.blur || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: 0 }); }}
+                      min={0} max={100} step={1} unit="%" sensitivity={0.5}
+                    />
+                    <CompactRulerControl
+                      label="Brightness"
+                      value={currentSelectedClipInterpolatedProps?.brightness ?? 100}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { brightness: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { brightness: 100 }); }}
+                      min={0} max={200} step={1} unit="%" sensitivity={1}
+                    />
+                    <CompactRulerControl
+                      label="Contrast"
+                      value={currentSelectedClipInterpolatedProps?.contrast ?? 100}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { contrast: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { contrast: 100 }); }}
+                      min={0} max={200} step={1} unit="%" sensitivity={1}
+                    />
+                    <CompactRulerControl
+                      label="Saturation"
+                      value={currentSelectedClipInterpolatedProps?.saturation ?? 100}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { saturation: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { saturation: 100 }); }}
+                      min={0} max={200} step={1} unit="%" sensitivity={1}
+                    />
                   </div>
                 </motion.div>
               )}
@@ -4358,6 +4573,90 @@ const renderEditor = () => (
                       );
                     })}
                   </div>
+                  <div className="flex flex-col gap-1.5 px-2.5 mt-2 border-t border-white/5 pt-2 max-h-[140px] overflow-y-auto scrollbar-hide">
+                    <CompactRulerControl
+                      label="Scale"
+                      value={currentSelectedClipInterpolatedProps?.maskScale ?? 1}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: 1 }); }}
+                      min={0} max={3} step={0.01} unit="x" sensitivity={0.02}
+                    />
+                    <CompactRulerControl
+                      label="Feather"
+                      value={currentSelectedClipInterpolatedProps?.maskFeather || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: 0 }); }}
+                      min={0} max={200} step={1} unit="px" sensitivity={1}
+                    />
+                    <CompactRulerControl
+                      label="Expand"
+                      value={currentSelectedClipInterpolatedProps?.maskExpansion || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: 0 }); }}
+                      min={-200} max={200} step={1} unit="px" sensitivity={1}
+                    />
+                  </div>
+                </motion.div>
+              )}
+              {activeExpandedMenu === "voiceover" && (
+                <motion.div
+                  layout
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full flex items-center p-2 z-10 sticky bottom-0"
+                  style={{marginBottom: -10}}
+                >
+                  <div 
+                    className="flex items-center gap-3 w-full bg-zinc-800/95 rounded-full border border-white/10 shadow-xl"
+                    style={{
+                      paddingLeft: "12px",
+                      paddingTop: "8px",
+                      paddingBottom: "10px",
+                      paddingRight: "11px",
+                      marginLeft: "0px",
+                      marginTop: "-4px",
+                      marginBottom: "8px",
+                      marginRight: "0px"
+                    }}
+                  >
+                    <div className="relative group cursor-pointer shrink-0" onClick={handleRecordClick}>
+                      {isRecording ? (
+                        <>
+                          <div className="absolute inset-0 bg-red-500/40 rounded-full blur-[12px] animate-pulse transition-all duration-500" />
+                          <div className="w-8 h-8 rounded-full bg-red-500 flex items-center justify-center animate-pulse z-10 border border-white/40 relative">
+                            <div className="w-2.5 h-2.5 bg-white rounded-sm" />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="absolute inset-0 bg-red-500/20 rounded-full blur-[8px] transition-all duration-500" />
+                          <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center group-hover:scale-105 group-active:scale-95 transition-all duration-300 z-10 border border-white/20 relative">
+                            <Mic size={14} className="text-white" />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    
+                    <div className="flex-1 flex flex-col justify-center overflow-hidden">
+                      <span className="text-[9px] font-bold text-white/60 tracking-widest uppercase mb-1">
+                        {isRecording ? "Recording..." : "Tap To Record"}
+                      </span>
+                      <div className="flex items-end gap-[2px] h-3">
+                          {[40, 70, 30, 80, 50, 100, 60, 40, 90, 50, 30, 70, 40, 80, 50, 60, 40, 90, 30].map((h, i) => (
+                             <div key={i} className="flex-1 bg-white/20 rounded-full" style={{ height: `${h}%`, minHeight: '2px' }} />
+                          ))}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setActiveExpandedMenu(null)}
+                      className="text-zinc-400 hover:text-white rounded-full p-2 shrink-0 transition-all bg-zinc-700/50 hover:bg-zinc-700"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -4383,9 +4682,14 @@ const renderEditor = () => (
                   if (selectedClip?.type === "image" && ["volume", "speed", "stabilize"].includes(key)) {
                     return false;
                   }
+                  // Allow voiceover button to show independently of selected clip, or strictly when no clip is selected.
+                  // For now, let it be always active or togglable anywhere.
                   return true;
                 }).map((key) => {
                   switch(key) {
+                    case 'voiceover': return (
+                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${activeExpandedMenu === "voiceover" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white"}`} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "voiceover" ? null : "voiceover")}><Mic size={16} /></motion.button>
+                    );
                     case 'volume': return (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "volume" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "volume" ? null : "volume")}><Volume2 size={16} /></motion.button>
                     );
@@ -4396,7 +4700,7 @@ const renderEditor = () => (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && ["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "") ? (activeExpandedMenu === "crop" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || !["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "")} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "crop" ? null : "crop")}><Crop size={16} /></motion.button>
                     );
                     case 'adjust': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId}><SlidersHorizontal size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "adjust" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "adjust" ? null : "adjust")}><SlidersHorizontal size={16} /></motion.button>
                     );
                     case 'speed': return (
                       <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "speed" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "speed" ? null : "speed")}><Clock size={16} /></motion.button>

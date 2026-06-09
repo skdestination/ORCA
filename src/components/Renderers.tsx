@@ -72,7 +72,7 @@ export function VideoRenderer({
     <video
       id={id}
       ref={videoRef}
-      src={clip.src}
+      src={clip.src || undefined}
       className={className || "w-full h-full object-cover"}
       muted={isMuted}
       playsInline
@@ -144,6 +144,6 @@ export function AudioRenderer({
   ]);
 
   return (
-    <audio ref={audioRef} src={clip.src} muted={isMuted} onError={onError} />
+    <audio ref={audioRef} src={clip.src || undefined} muted={isMuted} onError={onError} />
   );
 }

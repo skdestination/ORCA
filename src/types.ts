@@ -12,12 +12,37 @@ export type Keyframe = {
   id: string;
   timeOffset: number; // Offset from clip's leftSeconds
   properties: {
+    // Transform
     volume?: number;
     translateX?: number;
     translateY?: number;
+    scaleX?: number;
+    scaleY?: number;
+    scale?: number; // Uniform scale
     rotation?: number;
-    scale?: number;
+    anchorPointX?: number;
+    anchorPointY?: number;
+    
+    // Appearance
     opacity?: number;
+
+    // Effects
+    blur?: number;
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+    exposure?: number;
+    sharpen?: number;
+
+    // Masks
+    maskPositionX?: number;
+    maskPositionY?: number;
+    maskScale?: number;
+    maskRotation?: number;
+    maskFeather?: number;
+    maskExpansion?: number;
+
+    [key: string]: number | undefined;
   };
   curve?: "linear" | "easeIn" | "easeOut" | "easeInOut" | "hold";
 };
@@ -41,14 +66,39 @@ export type Clip = {
   volume?: number; // 0 to 100
   speed?: number; // playback speed modifier
   opticalFlow?: boolean; // smooth slow-motion
+  
+  // Transform Base
   translateX?: number;
   translateY?: number;
-  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
   scale?: number;
+  rotation?: number;
+  anchorPointX?: number;
+  anchorPointY?: number;
+
+  // Appearance Base
+  opacity?: number;
+
+  // Effects Base
+  blur?: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  exposure?: number;
+  sharpen?: number;
+
+  // Masks
   maskType?: "none" | "circle" | "square" | "rounded";
+  maskPositionX?: number;
+  maskPositionY?: number;
+  maskScale?: number;
+  maskRotation?: number;
+  maskFeather?: number;
+  maskExpansion?: number;
+
   cropRatio?: "1:1" | "16:9" | "9:16" | "4:3" | "free" | null;
   cropRect?: { top: number, right: number, bottom: number, left: number };
-  opacity?: number;
   mixBlendMode?: "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light" | "difference" | "exclusion" | "hue" | "saturation" | "color" | "luminosity";
   keyframes?: Keyframe[];
 };

@@ -2,13 +2,10 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 
 export interface SmoothSlowMotionPlugin {
-  interpolateVideo(options: { 
-    inputPath: string; 
-    outputPath: string; 
-  }): Promise<{ success: boolean; outputPath: string }>;
+  receiveVideoPath(options: { inputPath: string }): Promise<{ success: boolean; receivedPath: string }>;
 }
 
-const SmoothSlowMotion = registerPlugin<SmoothSlowMotionPlugin>("SmoothSlowMotion");
+const SmoothSlowMotionNative = registerPlugin<SmoothSlowMotionPlugin>("SmoothSlowMotion");
 
 export async function processSmoothSlowMoBrowser(
   videoBlobUrlOrBlob: string | Blob,
@@ -17,8 +14,7 @@ export async function processSmoothSlowMoBrowser(
 ): Promise<{ url: string; fileId: string }> {
 
   if (!Capacitor.isNativePlatform()) {
-    // Web Fallback
-    console.log("Web platform detected. Bypassing smooth slow motion to avoid WASM hanging.");
+    console.log("Web platform detected. Native plugin not used.");
     const url = typeof videoBlobUrlOrBlob === "string" 
       ? videoBlobUrlOrBlob 
       : URL.createObjectURL(videoBlobUrlOrBlob);
@@ -26,16 +22,13 @@ export async function processSmoothSlowMoBrowser(
   }
 
   // Focus on Native processing
-  console.log("Native platform detected. Processing via Optical Flow.");
+  console.log("Native platform detected. Verifying plugin receive path step.");
   const inputFileName = `input_${Date.now()}.mp4`;
-  const outputFileName = `output_${Date.now()}.mp4`;
   
-  // Write input file to Capacitor filesystem
   let base64Data: string;
   if (videoBlobUrlOrBlob instanceof Blob) {
     base64Data = await convertBlobToBase64(videoBlobUrlOrBlob);
   } else {
-    // String URL (blob:, http:, data:)
     const response = await fetch(videoBlobUrlOrBlob);
     const blob = await response.blob();
     base64Data = await convertBlobToBase64(blob);
@@ -51,44 +44,24 @@ export async function processSmoothSlowMoBrowser(
     directory: Directory.Cache,
     path: inputFileName
   });
-  
-  const outputUri = await Filesystem.getUri({
-    directory: Directory.Cache,
-    path: outputFileName
-  });
 
-  let fakeProgress = 1;
-  const progressInterval = setInterval(() => {
-    fakeProgress = Math.min(95, fakeProgress + 5);
-    onProgress(fakeProgress);
-  }, 1000);
-
-  // Command needs plain paths without file:// prefix for executeFFmpegCommand
   const rawInput = inputUri.uri.replace("file://", "");
-  const rawOutput = outputUri.uri.replace("file://", "");
-
+  
   try {
-    const result = await SmoothSlowMotion.interpolateVideo({ 
-      inputPath: rawInput, 
-      outputPath: rawOutput 
+    const result = await SmoothSlowMotionNative.receiveVideoPath({
+      inputPath: rawInput
     });
-
-    clearInterval(progressInterval);
+    console.log("Plugin verified returning:", result);
     onProgress(100);
 
-    if (!result.success) {
-      throw new Error(`Native optical flow plugin failed`);
-    }
-
-    const finalUrl = Capacitor.convertFileSrc(outputUri.uri);
-    return {
-      url: finalUrl,
-      fileId: outputUri.uri
-    };
+    // Returning original url because the feature is strictly incomplete right now
+    const url = typeof videoBlobUrlOrBlob === "string" 
+      ? videoBlobUrlOrBlob 
+      : URL.createObjectURL(videoBlobUrlOrBlob);
+    return { url, fileId: "incomplete-feature-" + Date.now().toString() };
 
   } catch (err: any) {
-    clearInterval(progressInterval);
-    console.error("Optical Flow native command failed", err);
+    console.error("Plugin failed to receive path", err);
     throw err;
   }
 }

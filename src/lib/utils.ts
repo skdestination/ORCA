@@ -32,6 +32,9 @@ export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu:
     maskRotation: clip.maskRotation ?? 0,
     maskFeather: clip.maskFeather ?? 0,
     maskExpansion: clip.maskExpansion ?? 0,
+    maskWidth: clip.maskWidth ?? (clip.maskType === "half" ? 100 : 60),
+    maskHeight: clip.maskHeight ?? (clip.maskType === "half" ? 50 : 60),
+    maskRoundness: clip.maskRoundness ?? 15,
   };
 
   if (!clip.keyframes || clip.keyframes.length === 0) {
@@ -131,5 +134,8 @@ export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu:
     maskRotation: getInterpolatedValue("maskRotation", baseProps.maskRotation, 0),
     maskFeather: getInterpolatedValue("maskFeather", baseProps.maskFeather, 0),
     maskExpansion: getInterpolatedValue("maskExpansion", baseProps.maskExpansion, 0),
+    maskWidth: getInterpolatedValue("maskWidth", baseProps.maskWidth, 60),
+    maskHeight: getInterpolatedValue("maskHeight", baseProps.maskHeight, 60),
+    maskRoundness: getInterpolatedValue("maskRoundness", baseProps.maskRoundness, 15),
   };
 }

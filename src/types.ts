@@ -41,6 +41,9 @@ export type Keyframe = {
     maskRotation?: number;
     maskFeather?: number;
     maskExpansion?: number;
+    maskWidth?: number;
+    maskHeight?: number;
+    maskRoundness?: number;
 
     [key: string]: number | undefined;
   };
@@ -89,13 +92,16 @@ export type Clip = {
   sharpen?: number;
 
   // Masks
-  maskType?: "none" | "circle" | "square" | "rounded";
+  maskType?: "none" | "circle" | "square" | "half";
   maskPositionX?: number;
   maskPositionY?: number;
   maskScale?: number;
   maskRotation?: number;
   maskFeather?: number;
   maskExpansion?: number;
+  maskWidth?: number;
+  maskHeight?: number;
+  maskRoundness?: number;
 
   cropRatio?: "1:1" | "16:9" | "9:16" | "4:3" | "free" | null;
   cropRect?: { top: number, right: number, bottom: number, left: number };

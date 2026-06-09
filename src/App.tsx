@@ -81,6 +81,209 @@ export const DEFAULT_FLOW_BAR_ORDER = [
   'mask',
 ];
 
+interface MaskControlOverlayProps {
+  clip: any;
+  updateClipsProperties: (clipIds: string[], updates: any) => void;
+}
+
+function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [activeDrag, setActiveDrag] = useState<"width" | "height" | "roundness" | null>(null);
+
+  const maskType = clip.maskType;
+  const maskWidth = clip.maskWidth ?? (maskType === "half" ? 100 : 60);
+  const maskHeight = clip.maskHeight ?? (maskType === "half" ? 50 : 60);
+  const maskRoundness = clip.maskRoundness ?? 15;
+
+  const halfW = maskWidth / 2;
+  const halfH = maskHeight / 2;
+
+  const handleStartDrag = (e: React.MouseEvent | React.TouchEvent, type: "width" | "height" | "roundness") => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveDrag(type);
+  };
+
+  useEffect(() => {
+    if (!activeDrag) return;
+
+    const handleMove = (clientX: number, clientY: number) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+
+      if (activeDrag === "width") {
+        const centerX = rect.left + w / 2;
+        const dx = Math.abs(clientX - centerX);
+        const newWidth = Math.max(5, Math.min(100, Math.round((dx / w) * 200)));
+        updateClipsProperties([clip.id], { maskWidth: newWidth });
+      } else if (activeDrag === "height") {
+        if (maskType === "half") {
+          const dy = clientY - rect.top;
+          const newHeight = Math.max(0, Math.min(100, Math.round((dy / h) * 100)));
+          updateClipsProperties([clip.id], { maskHeight: newHeight });
+        } else {
+          const centerY = rect.top + h / 2;
+          const dy = Math.abs(clientY - centerY);
+          const newHeight = Math.max(5, Math.min(100, Math.round((dy / h) * 200)));
+          updateClipsProperties([clip.id], { maskHeight: newHeight });
+        }
+      } else if (activeDrag === "roundness") {
+        const rightEdgeX = rect.left + w / 2 + (halfW / 100) * w;
+        const topEdgeY = rect.top + h / 2 - (halfH / 100) * h;
+        const dx = rightEdgeX - clientX;
+        const dy = clientY - topEdgeY;
+        const dragVal = Math.max(0, Math.min(100, Math.round((dx + dy) / 2)));
+        updateClipsProperties([clip.id], { maskRoundness: dragVal });
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      handleMove(e.clientX, e.clientY);
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        handleMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+
+    const onMouseUp = () => setActiveDrag(null);
+    const onTouchEnd = () => setActiveDrag(null);
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("touchmove", onTouchMove);
+    window.addEventListener("touchend", onTouchEnd);
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [activeDrag, clip.id, maskType, halfW, halfH, updateClipsProperties]);
+
+  if (!maskType || maskType === "none") return null;
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 pointer-events-none z-50 overflow-visible"
+    >
+      {/* SVG stroke representing the mask boundary in the preview */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+        {maskType === "circle" && (
+          <ellipse
+            cx="50%"
+            cy="50%"
+            rx={`${halfW}%`}
+            ry={`${halfH}%`}
+            fill="none"
+            stroke="#a855f7"
+            strokeWidth="2"
+            strokeDasharray="4 3"
+            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+          />
+        )}
+        {maskType === "square" && (
+          <rect
+            x={`${50 - halfW}%`}
+            y={`${50 - halfH}%`}
+            width={`${maskWidth}%`}
+            height={`${maskHeight}%`}
+            rx={`${maskRoundness / 2}%`}
+            ry={`${maskRoundness / 2}%`}
+            fill="none"
+            stroke="#22c55e"
+            strokeWidth="2"
+            strokeDasharray="4 3"
+            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+          />
+        )}
+        {maskType === "half" && (
+          <line
+            x1="0%"
+            y1={`${maskHeight}%`}
+            x2="100%"
+            y2={`${maskHeight}%`}
+            stroke="#3b82f6"
+            strokeWidth="2"
+            strokeDasharray="4 3"
+            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+          />
+        )}
+      </svg>
+
+      {/* Interactive Controls & Arrow Handles */}
+      {(maskType === "circle" || maskType === "square") && (
+        <div
+          style={{
+            left: `${50 + halfW}%`,
+            top: `50%`,
+            transform: "translate(-50%, -50%)"
+          }}
+          onMouseDown={(e) => handleStartDrag(e, "width")}
+          onTouchStart={(e) => handleStartDrag(e, "width")}
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ew-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          title="Drag to adjust width"
+        >
+          <span className="text-[14px] font-bold select-none leading-none">↔</span>
+        </div>
+      )}
+
+      {(maskType === "circle" || maskType === "square") && (
+        <div
+          style={{
+            left: `50%`,
+            top: `${50 + halfH}%`,
+            transform: "translate(-50%, -50%)"
+          }}
+          onMouseDown={(e) => handleStartDrag(e, "height")}
+          onTouchStart={(e) => handleStartDrag(e, "height")}
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          title="Drag to adjust height"
+        >
+          <span className="text-[14px] font-bold select-none leading-none">↕</span>
+        </div>
+      )}
+
+      {maskType === "half" && (
+        <div
+          style={{
+            left: `50%`,
+            top: `${maskHeight}%`,
+            transform: "translate(-50%, -50%)"
+          }}
+          onMouseDown={(e) => handleStartDrag(e, "height")}
+          onTouchStart={(e) => handleStartDrag(e, "height")}
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-[#3b82f6] border-2 border-[#3b82f6] shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          title="Drag and adjust split height"
+        >
+          <span className="text-[14px] font-bold select-none leading-none">↕</span>
+        </div>
+      )}
+
+      {maskType === "square" && (
+        <div
+          style={{
+            left: `${50 + halfW - (maskRoundness / 4)}%`,
+            top: `${50 - halfH + (maskRoundness / 4)}%`,
+            transform: "translate(-50%, -50%)"
+          }}
+          onMouseDown={(e) => handleStartDrag(e, "roundness")}
+          onTouchStart={(e) => handleStartDrag(e, "roundness")}
+          className="absolute w-6 h-6 flex items-center justify-center rounded-full bg-emerald-950 text-emerald-400 border-2 border-emerald-400 shadow-xl cursor-pointer pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          title="Drag to adjust corner rounding"
+        >
+          <span className="text-[11px] font-bold select-none leading-none">◯</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -175,6 +378,12 @@ export default function App() {
   const [activeExpandedMenu, setActiveExpandedMenu] = useState<string | null>(
     null,
   );
+  const [maskAdjustOpen, setMaskAdjustOpen] = useState(false);
+  useEffect(() => {
+    if (activeExpandedMenu === "mask") {
+      setMaskAdjustOpen(true);
+    }
+  }, [activeExpandedMenu]);
   const [layerMenuOpenId, setLayerMenuOpenId] = useState<string | null>(null);
   const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null);
   const hasDraggedLayerRef = useRef(false);
@@ -2666,18 +2875,33 @@ const renderEditor = () => (
               const interpolatedProps = getInterpolatedProps(activeClipRaw, currentTime - activeClipRaw.leftSeconds, activeExpandedMenu);
               const activeClip = { ...activeClipRaw, ...interpolatedProps };
 
-              const getClipPath = (maskType?: string) => {
+              const getClipPath = (
+                maskType?: string,
+                maskWidth: number = 60,
+                maskHeight: number = 60,
+                maskRoundness: number = 15
+              ) => {
                 switch (maskType) {
                   case "circle":
-                    return "circle(50% at 50% 50%)";
-                  case "square":
-                    return "inset(15% 15% 15% 15%)";
-                  case "rounded":
-                    return "inset(5% 5% 5% 5% round 15%)";
+                    return `ellipse(${maskWidth / 2}% ${maskHeight / 2}% at 50% 50%)`;
+                  case "square": {
+                    const topBottom = (100 - maskHeight) / 2;
+                    const leftRight = (100 - maskWidth) / 2;
+                    return `inset(${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% ${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% round ${maskRoundness}px)`;
+                  }
+                  case "half":
+                    return `inset(0% 0% ${100 - maskHeight}% 0%)`;
                   default:
                     return "none";
                 }
               };
+
+              const clipPathVal = getClipPath(
+                activeClip.maskType,
+                activeClip.maskWidth,
+                activeClip.maskHeight,
+                activeClip.maskRoundness
+              );
 
               const transformStyle: React.CSSProperties = {
                 transformOrigin: `${(activeClip.anchorPointX ?? 0.5) * 100}% ${(activeClip.anchorPointY ?? 0.5) * 100}%`,
@@ -2687,7 +2911,7 @@ const renderEditor = () => (
                   scaleX(${(activeClip.scaleX ?? 1) * (activeClip.scale ?? 1)})
                   scaleY(${(activeClip.scaleY ?? 1) * (activeClip.scale ?? 1)})
                 `,
-                clipPath: getClipPath(activeClip.maskType),
+                clipPath: "none",
                 opacity: activeClip.opacity ?? 1,
                 mixBlendMode: activeClip.mixBlendMode as any || "normal",
                 filter: `
@@ -2749,7 +2973,7 @@ const renderEditor = () => (
                       )}
                       {activeClip.type === "image" && (
                         <div
-                          className="pointer-events-none select-none overflow-hidden max-w-full max-h-full flex items-center justify-center relative shadow-lg"
+                          className="pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
                           style={{
                                ...transformStyle,
                                ...(activeClip.cropRatio ? {
@@ -2758,13 +2982,18 @@ const renderEditor = () => (
                                } : { width: '100%', height: '100%' }),
                           }}
                         >
-                          <img
-                            id={`clip-media-${activeClip.id}`}
-                            src={activeClip.src || undefined}
-                            className="w-full h-full object-cover pointer-events-none"
-                            crossOrigin="anonymous"
-                            onError={() => handleClipError(activeClip.id)}
-                          />
+                          <div
+                            className="w-full h-full relative"
+                            style={{ clipPath: clipPathVal }}
+                          >
+                            <img
+                              id={`clip-media-${activeClip.id}`}
+                              src={activeClip.src || undefined}
+                              className="w-full h-full object-cover pointer-events-none"
+                              crossOrigin="anonymous"
+                              onError={() => handleClipError(activeClip.id)}
+                            />
+                          </div>
                           {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
                              <div className="absolute inset-0 pointer-events-none border-2 border-white grid grid-cols-3 grid-rows-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)]">
                                <div className="border-r border-b border-white/40"></div>
@@ -2778,11 +3007,17 @@ const renderEditor = () => (
                                <div></div>
                              </div>
                           )}
+                          {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
+                            <MaskControlOverlay
+                              clip={activeClip}
+                              updateClipsProperties={updateClipsProperties}
+                            />
+                          )}
                         </div>
                       )}
                       {activeClip.type === "video" && (
                         <div
-                          className="pointer-events-none select-none overflow-hidden max-w-full max-h-full flex items-center justify-center relative shadow-lg"
+                          className="pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
                           style={{
                                ...transformStyle,
                                ...(activeClip.cropRatio ? {
@@ -2791,15 +3026,20 @@ const renderEditor = () => (
                                } : { width: '100%', height: '100%' }),
                           }}
                         >
-                          <VideoRenderer
-                            id={`clip-media-${activeClip.id}`}
-                            clip={activeClip}
-                            currentTime={currentTime}
-                            isPlaying={isPlaying}
-                            isMuted={layer.isMuted}
-                            className="w-full h-full object-cover pointer-events-none"
-                            onError={() => handleClipError(activeClip.id)}
-                          />
+                          <div
+                            className="w-full h-full relative"
+                            style={{ clipPath: clipPathVal }}
+                          >
+                            <VideoRenderer
+                              id={`clip-media-${activeClip.id}`}
+                              clip={activeClip}
+                              currentTime={currentTime}
+                              isPlaying={isPlaying}
+                              isMuted={layer.isMuted}
+                              className="w-full h-full object-cover pointer-events-none"
+                              onError={() => handleClipError(activeClip.id)}
+                            />
+                          </div>
                           {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
                              <div className="absolute inset-0 pointer-events-none border-2 border-white grid grid-cols-3 grid-rows-3 shadow-[0_0_0_9999px_rgba(0,0,0,0.5)] z-50">
                                <div className="border-r border-b border-white/40"></div>
@@ -2812,6 +3052,12 @@ const renderEditor = () => (
                                <div className="border-r border-white/40"></div>
                                <div></div>
                              </div>
+                          )}
+                          {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
+                            <MaskControlOverlay
+                              clip={activeClip}
+                              updateClipsProperties={updateClipsProperties}
+                            />
                           )}
                         </div>
                       )}
@@ -4500,7 +4746,7 @@ const renderEditor = () => (
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: 10 }}
                   transition={{ duration: 0.2 }}
-                  className="flex flex-col w-full h-auto pb-1 pt-0 shrink-0"
+                  className="flex flex-col w-full h-auto pb-1.5 pt-0 shrink-0"
                 >
                   <div className="flex justify-between items-center w-full px-3.5 mb-1.5">
                     <span className="text-[10px] font-semibold text-white/90">
@@ -4539,10 +4785,12 @@ const renderEditor = () => (
                         ),
                       },
                       {
-                        id: "rounded",
-                        name: "Rounded",
+                        id: "half",
+                        name: "Half",
                         icon: (
-                          <div className="w-[14px] h-[14px] border-2 border-white/40 rounded" />
+                          <div className="w-[14px] h-[14px] border-b-2 border-white/40 flex items-end justify-center">
+                            <div className="w-full h-[6px] bg-white/20" />
+                          </div>
                         ),
                       },
                     ].map((mask) => {
@@ -4573,29 +4821,87 @@ const renderEditor = () => (
                       );
                     })}
                   </div>
-                  <div className="flex flex-col gap-1.5 px-2.5 mt-2 border-t border-white/5 pt-2 max-h-[140px] overflow-y-auto scrollbar-hide">
-                    <CompactRulerControl
-                      label="Scale"
-                      value={currentSelectedClipInterpolatedProps?.maskScale ?? 1}
-                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: val }); }}
-                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: 1 }); }}
-                      min={0} max={3} step={0.01} unit="x" sensitivity={0.02}
-                    />
-                    <CompactRulerControl
-                      label="Feather"
-                      value={currentSelectedClipInterpolatedProps?.maskFeather || 0}
-                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: val }); }}
-                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: 0 }); }}
-                      min={0} max={200} step={1} unit="px" sensitivity={1}
-                    />
-                    <CompactRulerControl
-                      label="Expand"
-                      value={currentSelectedClipInterpolatedProps?.maskExpansion || 0}
-                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: val }); }}
-                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: 0 }); }}
-                      min={-200} max={200} step={1} unit="px" sensitivity={1}
-                    />
-                  </div>
+
+                  {(() => {
+                    const activeClip = clips.find((c) => c.id === selectedClipId);
+                    if (!activeClip || !activeClip.maskType || activeClip.maskType === "none") return null;
+
+                    return (
+                      <>
+                        <div className="mt-2 text-center">
+                          <button
+                            onClick={() => setMaskAdjustOpen(!maskAdjustOpen)}
+                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[9px] font-semibold tracking-wider uppercase transition-all border ${maskAdjustOpen ? "bg-purple-600/20 text-[#c084fc] border-purple-500/30" : "bg-zinc-800 text-zinc-400 border-white/5 hover:text-white"}`}
+                          >
+                            <SlidersHorizontal size={10} />
+                            {maskAdjustOpen ? "Hide Options" : "Adjust Settings"}
+                          </button>
+                        </div>
+
+                        {maskAdjustOpen && (
+                          <div className="flex flex-col gap-1.5 px-2.5 mt-2 border-t border-white/5 pt-2 max-h-[160px] overflow-y-auto scrollbar-hide">
+                            {/* Width Slider (except Half) */}
+                            {activeClip.maskType !== "half" && (
+                              <CompactRulerControl
+                                label="Width"
+                                value={activeClip.maskWidth ?? 60}
+                                onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: val }); }}
+                                onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: 60 }); }}
+                                min={5} max={100} step={1} unit="%" sensitivity={1}
+                              />
+                            )}
+
+                            {/* Height / Position Slider */}
+                            <CompactRulerControl
+                              label={activeClip.maskType === "half" ? "Split Height" : "Height"}
+                              value={activeClip.maskHeight ?? (activeClip.maskType === "half" ? 50 : 60)}
+                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: val }); }}
+                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: activeClip.maskType === "half" ? 50 : 60 }); }}
+                              min={activeClip.maskType === "half" ? 0 : 5} max={100} step={1} unit="%" sensitivity={1}
+                            />
+
+                            {/* Corner Roundness (Square only) */}
+                            {activeClip.maskType === "square" && (
+                              <CompactRulerControl
+                                label="Roundness"
+                                value={activeClip.maskRoundness ?? 15}
+                                onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: val }); }}
+                                onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: 15 }); }}
+                                min={0} max={100} step={1} unit="px" sensitivity={1}
+                              />
+                            )}
+
+                            {/* Scale Slider */}
+                            <CompactRulerControl
+                              label="Scale"
+                              value={activeClip.maskScale ?? 1}
+                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: val }); }}
+                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskScale: 1 }); }}
+                              min={0.1} max={3} step={0.01} unit="x" sensitivity={0.02}
+                            />
+
+                            {/* Feather Slider */}
+                            <CompactRulerControl
+                              label="Feather"
+                              value={activeClip.maskFeather ?? 0}
+                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: val }); }}
+                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: 0 }); }}
+                              min={0} max={200} step={1} unit="px" sensitivity={1}
+                            />
+
+                            {/* Expansion Slider */}
+                            <CompactRulerControl
+                              label="Expansion"
+                              value={activeClip.maskExpansion ?? 0}
+                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: val }); }}
+                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: 0 }); }}
+                              min={-200} max={200} step={1} unit="px" sensitivity={1}
+                            />
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </motion.div>
               )}
               {activeExpandedMenu === "voiceover" && (

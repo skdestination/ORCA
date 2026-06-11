@@ -1,5 +1,26 @@
 import { Clip, Keyframe } from "../types";
 
+export function solveCubicBezier(x1: number, y1: number, x2: number, y2: number, t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  // Binary search for u
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 8; i++) {
+    const u = (low + high) / 2;
+    // Calculate x of bezier
+    const x = 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u;
+    if (x < t) {
+      low = u;
+    } else {
+      high = u;
+    }
+  }
+  const u = (low + high) / 2;
+  // Calculate y
+  return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+}
+
 export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu: string | null) {
   const normVolume = (v: number | undefined) => {
     if (v === undefined) return 100;
@@ -78,22 +99,27 @@ export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu:
         let progress = range === 0 ? 0 : (timeInClip - startKf.timeOffset) / range;
 
         // 4. Apply interpolation curve (Easing)
-        switch (startKf.curve) {
-          case "easeIn": 
-            progress = progress * progress; 
-            break;
-          case "easeOut": 
-            progress = progress * (2 - progress); 
-            break;
-          case "easeInOut": 
-            progress = progress < 0.5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress; 
-            break;
-          case "hold": 
-            progress = 0; 
-            break;
-          case "linear": 
-          default: 
-            break;
+        if (startKf.customEasePoints) {
+          const [x1, y1, x2, y2] = startKf.customEasePoints;
+          progress = solveCubicBezier(x1, y1, x2, y2, progress);
+        } else {
+          switch (startKf.curve) {
+            case "easeIn": 
+              progress = progress * progress; 
+              break;
+            case "easeOut": 
+              progress = progress * (2 - progress); 
+              break;
+            case "easeInOut": 
+              progress = progress < 0.5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress; 
+              break;
+            case "hold": 
+              progress = 0; 
+              break;
+            case "linear": 
+            default: 
+              break;
+          }
         }
 
         const startRaw = startKf.properties[propName];

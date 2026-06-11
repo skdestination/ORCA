@@ -49,6 +49,7 @@ export type Keyframe = {
     [key: string]: number | undefined;
   };
   curve?: "linear" | "easeIn" | "easeOut" | "easeInOut" | "hold";
+  customEasePoints?: [number, number, number, number];
 };
 
 export type Clip = {
@@ -112,6 +113,10 @@ export type Clip = {
     type: string;
     duration: number;
   };
+  isStabilized?: boolean;
+  stabilizationMode?: "standard" | "active" | "locked" | "off";
+  stabilizationStrength?: number;
+  compareStabilization?: boolean;
 };
 
 export type Project = {

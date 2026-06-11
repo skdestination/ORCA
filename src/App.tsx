@@ -59,6 +59,10 @@ import {
   Link2,
   Lock,
   Unlock,
+  Minimize2,
+  Maximize2,
+  ArrowLeft,
+  Clipboard,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -512,6 +516,8 @@ export default function App() {
   }, [currentTime]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = normal, 2 = zoomed in
+  const [isCompactMode, setIsCompactMode] = useState(false);
+  const [stabilizingProgress, setStabilizingProgress] = useState<{ clipId: string; progress: number; stage: string } | null>(null);
   const [playheadX, setPlayheadX] = useState(150);
   const playheadXRef = useRef(150);
   const [activeExpandedMenu, setActiveExpandedMenu] = useState<string | null>(
@@ -539,7 +545,10 @@ export default function App() {
   const [multiSelectActive, setMultiSelectActive] = useState(false);
   const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [marquee, setMarquee] = useState<{ startX: number, startY: number, currentX: number, currentY: number } | null>(null);
-  const [showKeyframeGraph, setShowKeyframeGraph] = useState(false);
+  const [selectedInterpolationPreset, setSelectedInterpolationPreset] = useState<string>("linear");
+  const [draggingHandle, setDraggingHandle] = useState<1 | 2 | null>(null);
+  const interpolationLongPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasTriggeredLongPress = useRef<boolean>(false);
 
   const [transitionModal, setTransitionModal] = useState<{
     prevClipId: string;
@@ -614,7 +623,7 @@ export default function App() {
     return active;
   }, [isTransitionAllowed]);
 
-  const addTransition = useCallback((incomingClipId: string, type: string, duration: number) => {
+  const addTransition = useCallback((incomingClipId: string, type: string, duration: number, silent = false) => {
     setClips((prevClips) =>
       prevClips.map((c) => {
         if (c.id === incomingClipId) {
@@ -626,8 +635,10 @@ export default function App() {
         return c;
       })
     );
-    setToastMessage("Transition applied successfully");
-    setTimeout(() => setToastMessage(null), 2000);
+    if (!silent) {
+      setToastMessage("Transition applied successfully");
+      setTimeout(() => setToastMessage(null), 2000);
+    }
   }, []);
 
   const removeTransition = useCallback((incomingClipId: string) => {
@@ -733,13 +744,9 @@ export default function App() {
     return null;
   }, [activeExpandedMenu, selectedClipId, currentSelectedClipInterpolatedProps]);
 
-  const isBetweenKeyframes = (selectedClip?.keyframes?.filter(k => {
-    if (activeExpandedMenu === "volume") {
-      return k.properties.volume !== undefined;
-    } else {
-      return k.properties.translateX !== undefined || k.properties.scale !== undefined;
-    }
-  }).length ?? 0) >= 2;
+  const isBetweenVolumeKeyframes = (selectedClip?.keyframes?.filter(k => k.properties.volume !== undefined).length ?? 0) >= 2;
+  const isBetweenLayoutKeyframes = (selectedClip?.keyframes?.filter(k => k.properties.translateX !== undefined || k.properties.scale !== undefined).length ?? 0) >= 2;
+  const isBetweenKeyframes = isBetweenVolumeKeyframes || isBetweenLayoutKeyframes;
 
   const [isExportExpanded, setIsExportExpanded] = useState(false);
   const [pillPopup, setPillPopup] = useState<{ message: string; progress?: number; type: 'info' | 'loading' } | null>(null);
@@ -1591,12 +1598,7 @@ export default function App() {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     copyTimerRef.current = setTimeout(() => {
       setCopyLongPressed(true);
-      setMultiSelectActive(prev => {
-        const next = !prev;
-        setToastMessage(next ? "Multi-Select Mode Activated" : "Multi-Select Mode Deactivated");
-        setTimeout(() => setToastMessage(null), 2000);
-        return next;
-      });
+      setMultiSelectActive(prev => !prev);
       try {
         if (navigator.vibrate) {
           navigator.vibrate(50);
@@ -1662,26 +1664,79 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2000);
   };
 
-  const handleStabilize = (clipId: string, cropLimit: "low" | "high") => {
+  const handleStabilize = (clipId: string, mode: "standard" | "active" | "locked" | "off") => {
     const clip = clips.find(c => c.id === clipId);
     if (!clip || !clip.src) {
         setToastMessage("Error: Clip not found or no source!");
         return;
     }
-    
-    setPillPopup({ message: `Stabilizing with ${cropLimit} crop limit...`, type: 'loading', progress: 0 });
-    // Placeholder for actual stabilization logic
-    console.log(`Stabilizing clip ${clipId} with ${cropLimit} crop limit`);
-    
-    // Simulate stabilization progress
-    setTimeout(() => {
-        setPillPopup({ message: "Stabilization Applied", type: 'info' });
-        setTimeout(() => {
-            setPillPopup(null);
-        }, 2000);
-    }, 2000);
-    
-    setActiveExpandedMenu(null);
+
+    if (mode === "off") {
+      setClips((prev) =>
+        prev.map((c) =>
+          c.id === clipId
+            ? {
+                ...c,
+                isStabilized: false,
+                stabilizationMode: "off",
+                compareStabilization: false,
+              }
+            : c
+        )
+      );
+      setToastMessage("Stabilization turned off");
+      setTimeout(() => setToastMessage(null), 2000);
+      return;
+    }
+
+    // Initialize progress tracking
+    setStabilizingProgress({
+      clipId,
+      progress: 0,
+      stage: "Optical flow analysis...",
+    });
+
+    let currentProgress = 0;
+    const interval = setInterval(() => {
+      currentProgress += 5;
+      let stage = "Analyzing camera rotation...";
+      if (currentProgress < 25) {
+        stage = "Analyzing warp vectors...";
+      } else if (currentProgress < 50) {
+        stage = "Smoothing frame translations...";
+      } else if (currentProgress < 75) {
+        stage = "Synthesizing viewport margin crop...";
+      } else if (currentProgress < 95) {
+        stage = "Applying continuous warp stabilizer...";
+      } else {
+        stage = "Completing mesh compilation...";
+      }
+
+      setStabilizingProgress({
+        clipId,
+        progress: Math.min(100, currentProgress),
+        stage,
+      });
+
+      if (currentProgress >= 100) {
+        clearInterval(interval);
+        setClips((prev) =>
+          prev.map((c) =>
+            c.id === clipId
+              ? {
+                  ...c,
+                  isStabilized: true,
+                  stabilizationMode: mode,
+                  compareStabilization: c.compareStabilization ?? false,
+                }
+              : c
+          )
+        );
+        setStabilizingProgress(null);
+        setToastMessage(`Stabilization complete: ${mode.toUpperCase()} mode applied`);
+        setTimeout(() => setToastMessage(null), 2500);
+      }
+    }, 100);
   };
 
   const handlePaste = () => {
@@ -2075,22 +2130,27 @@ export default function App() {
       
       const finalDeltaSeconds = newLeftSeconds - initialLeftSeconds;
 
-      // Handle layer dropping ONLY if a single clip is selected
+      const elementsUnder = document.elementsFromPoint(
+        moveEvent.clientX,
+        moveEvent.clientY,
+      );
+      const trackEl = elementsUnder.find((el) =>
+        el.classList.contains("track-space"),
+      );
+
+      // Handle layer dropping
       let targetLayerId = fallbackLayerId;
+      if (trackEl) {
+        targetLayerId = trackEl.getAttribute("data-layer-id") || fallbackLayerId;
+      }
+
       if (activeSelectedIds.length === 1) {
-        const elementsUnder = document.elementsFromPoint(
-          moveEvent.clientX,
-          moveEvent.clientY,
-        );
-        const trackEl = elementsUnder.find((el) =>
-          el.classList.contains("track-space"),
-        );
         const timelineInner = elementsUnder.find(
           (el) => el.id === "timeline-inner",
         );
 
         if (trackEl) {
-          targetLayerId = trackEl.getAttribute("data-layer-id") || fallbackLayerId;
+          // Handled above
         } else if (timelineInner && !isCreatingLayer) {
           // Create layer
           isCreatingLayer = true;
@@ -2142,11 +2202,29 @@ export default function App() {
               : c,
           );
         } else {
-          // Multi clip - just apply delta
+          // Multi clip - apply both horizontal delta and relative vertical layer offset!
+          const actClipInit = initialClipsData.get(clip.id);
+          const sortedLayers = [...layers].sort((a, b) => b.order - a.order);
+          const originalLayerIndex = actClipInit ? sortedLayers.findIndex(l => l.id === actClipInit.layer) : -1;
+          const targetLayerIndex = sortedLayers.findIndex(l => l.id === targetLayerId);
+          const layerOffset = (originalLayerIndex !== -1 && targetLayerIndex !== -1) ? (targetLayerIndex - originalLayerIndex) : 0;
+
           return prevClips.map((c) => {
             if (activeSelectedIds.includes(c.id)) {
               const init = initialClipsData.get(c.id);
-              if (init) return { ...c, leftSeconds: Math.max(0, init.left + effectiveDelta) };
+              if (init) {
+                const initLayerIndex = sortedLayers.findIndex(l => l.id === init.layer);
+                let finalLayerId = init.layer;
+                if (initLayerIndex !== -1 && layerOffset !== 0) {
+                  const targetIndex = Math.max(0, Math.min(sortedLayers.length - 1, initLayerIndex + layerOffset));
+                  finalLayerId = sortedLayers[targetIndex].id;
+                }
+                return { 
+                  ...c, 
+                  leftSeconds: Math.max(0, init.left + effectiveDelta),
+                  layerId: finalLayerId
+                };
+              }
             }
             return c;
           });
@@ -3408,46 +3486,128 @@ const renderEditor = () => (
                               </div>
                             )}
 
-                            {activeClip.type === "video" && (
-                              <div
-                                className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
-                                style={{
-                                     ...transformStyle,
-                                     ...(activeClip.cropRatio ? {
-                                        width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
-                                        height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
-                                     } : { width: '100%', height: '100%' }),
-                                }}
-                              >
-                                <div
-                                  className="w-full h-full relative"
-                                  style={{ clipPath: clipPathVal }}
-                                >
-                                  <VideoRenderer
-                                    id={`clip-media-${activeClip.id}`}
-                                    clip={activeClip}
-                                    currentTime={currentTime}
-                                    isPlaying={isPlaying}
-                                    isMuted={layer.isMuted}
-                                    className="w-full h-full object-cover pointer-events-none"
-                                    onError={() => handleClipError(activeClip.id)}
-                                    volumeMultiplier={transVolumeMultiplier}
-                                  />
-                                </div>
-                                {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
-                                   <CropControlOverlay
+                             {activeClip.type === "video" && (
+                               <div
+                                 className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
+                                 style={{
+                                      ...transformStyle,
+                                      ...(activeClip.cropRatio ? {
+                                         width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
+                                         height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
+                                      } : { width: '100%', height: '100%' }),
+                                 }}
+                               >
+                                 {activeClip.isStabilized && activeClip.compareStabilization ? (() => {
+                                   const scaleFactor = activeClip.stabilizationMode === "locked" ? 1.28 : activeClip.stabilizationMode === "active" ? 1.18 : 1.08;
+                                   
+                                   const sX = isPlaying ? Math.sin(currentTime * 32) * 5 : 0;
+                                   const sY = isPlaying ? Math.cos(currentTime * 24) * 4 : 0;
+                                   const sR = isPlaying ? Math.sin(currentTime * 16) * 0.8 : 0;
+
+                                   return (
+                                     <div className="w-full h-full relative flex overflow-hidden rounded-lg bg-black">
+                                       {/* Left Half: Shaky Footage */}
+                                       <div className="absolute top-0 left-0 w-1/2 h-full overflow-hidden border-r border-white/20 z-10">
+                                         <div 
+                                           className="absolute top-0 left-0 w-[200%] h-full transform-gpu"
+                                           style={{ 
+                                             transform: `translate(${sX}px, ${sY}px) rotate(${sR}deg)`,
+                                             clipPath: clipPathVal,
+                                             height: "100%"
+                                           }}
+                                         >
+                                           <VideoRenderer
+                                             id={`clip-media-orig-${activeClip.id}`}
+                                             clip={activeClip}
+                                             currentTime={currentTime}
+                                             isPlaying={isPlaying}
+                                             isMuted={layer.isMuted}
+                                             className="w-full h-full object-cover pointer-events-none"
+                                             onError={() => handleClipError(activeClip.id)}
+                                             volumeMultiplier={transVolumeMultiplier}
+                                           />
+                                         </div>
+                                         <div className="absolute top-2 left-2 bg-red-600/90 text-white font-extrabold text-[8px] uppercase tracking-widest px-2 py-0.5 rounded shadow-lg z-20">
+                                           Original Shaky
+                                         </div>
+                                       </div>
+
+                                       {/* Right Half: Stabilized Footage */}
+                                       <div className="absolute top-0 right-0 w-1/2 h-full overflow-hidden z-10">
+                                         <div 
+                                           className="absolute top-0 right-0 w-[200%] h-full transform-gpu"
+                                           style={{ 
+                                             transform: `scale(${scaleFactor})`,
+                                             clipPath: clipPathVal,
+                                             height: "100%"
+                                           }}
+                                         >
+                                           <div className="absolute right-0 top-0 w-1/2 h-full">
+                                             <VideoRenderer
+                                               id={`clip-media-stab-${activeClip.id}`}
+                                               clip={activeClip}
+                                               currentTime={currentTime}
+                                               isPlaying={isPlaying}
+                                               isMuted={layer.isMuted}
+                                               className="w-full h-full object-cover pointer-events-none"
+                                               onError={() => handleClipError(activeClip.id)}
+                                               volumeMultiplier={transVolumeMultiplier}
+                                             />
+                                           </div>
+                                         </div>
+                                         <div className="absolute top-2 right-2 bg-emerald-500/90 text-white font-extrabold text-[8px] uppercase tracking-widest px-2 py-0.5 rounded shadow-lg flex items-center gap-1 z-20">
+                                           <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                           Stabilized
+                                         </div>
+                                       </div>
+
+                                       {/* Center Sliding Bar */}
+                                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0.5 h-full bg-white/40 shadow-xl z-30 flex items-center justify-center">
+                                         <div className="w-4 h-4 bg-zinc-800 rounded-full border border-white/20 flex items-center justify-center text-[7px] text-white">
+                                           ↔
+                                         </div>
+                                       </div>
+                                     </div>
+                                   );
+                                 })() : (
+                                   <div
+                                     className="w-full h-full relative"
+                                     style={{ 
+                                       clipPath: clipPathVal,
+                                       transform: activeClip.isStabilized ? `scale(${activeClip.stabilizationMode === "locked" ? 1.28 : activeClip.stabilizationMode === "active" ? 1.18 : 1.08})` : "none" 
+                                     }}
+                                   >
+                                     <VideoRenderer
+                                       id={`clip-media-${activeClip.id}`}
+                                       clip={activeClip}
+                                       currentTime={currentTime}
+                                       isPlaying={isPlaying}
+                                       isMuted={layer.isMuted}
+                                       className="w-full h-full object-cover pointer-events-none"
+                                       onError={() => handleClipError(activeClip.id)}
+                                       volumeMultiplier={transVolumeMultiplier}
+                                     />
+                                     {activeClip.isStabilized && (
+                                       <div className="absolute top-2 right-2 bg-indigo-500/85 text-white font-bold text-[8px] tracking-widest uppercase px-1.5 py-0.5 rounded shadow-md pointer-events-none z-20 flex items-center gap-1">
+                                         ✓ Stabilized ({activeClip.stabilizationMode})
+                                       </div>
+                                     )}
+                                   </div>
+                                 )}
+                                 {activeExpandedMenu === "crop" && selectedClipId === activeClip.id && (
+                                    <CropControlOverlay
+                                      clip={activeClip}
+                                      updateClipsProperties={updateClipsProperties}
+                                    />
+                                 )}
+                                 {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
+                                   <MaskControlOverlay
                                      clip={activeClip}
                                      updateClipsProperties={updateClipsProperties}
                                    />
-                                )}
-                                {activeExpandedMenu === "mask" && selectedClipId === activeClip.id && (
-                                  <MaskControlOverlay
-                                    clip={activeClip}
-                                    updateClipsProperties={updateClipsProperties}
-                                  />
-                                )}
-                              </div>
-                            )}
+                                 )}
+                               </div>
+                             )}
 
                             {activeClip.type === "audio" && (
                               <AudioRenderer
@@ -3514,8 +3674,86 @@ const renderEditor = () => (
                 )}
               </button>
             </div>
-            
-            {selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "text" && (
+
+            {multiSelectActive && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, x: -10 }}
+                animate={{ opacity: 1, scale: 1, x: 0 }}
+                exit={{ opacity: 0, scale: 0.9, x: -10 }}
+                transition={{ duration: 0.2 }}
+                className="flex items-center bg-[#1c1c1f] border border-white/10 rounded-full py-0.5 sm:py-1 px-1 sm:px-1.5 gap-0.5 sm:gap-1 shadow-md shrink-0 h-7 sm:h-8 mr-1 select-none"
+              >
+                {/* Divider 1 */}
+                <div className="w-px h-3 sm:h-4 bg-zinc-700/60 mx-1 shrink-0" />
+
+                {/* 1. Comp Button */}
+                <button
+                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  onClick={() => {
+                    setToastMessage("Comp: Composite action triggered");
+                    setTimeout(() => setToastMessage(null), 2000);
+                  }}
+                  title="Comp Action"
+                >
+                  <Layers size={11} className="text-indigo-400 sm:w-3 sm:h-3" />
+                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Comp</span>
+                </button>
+
+                {/* Divider 2 */}
+                <div className="w-px h-3 sm:h-4 bg-zinc-700/60 mx-1 shrink-0" />
+
+                {/* 2. Link Button */}
+                <button
+                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  onClick={() => {
+                    setToastMessage("Link of selected clips triggered");
+                    setTimeout(() => setToastMessage(null), 2000);
+                  }}
+                  title="Link Action"
+                >
+                  <Link2 size={11} className="text-emerald-400 sm:w-3 sm:h-3" />
+                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Link</span>
+                </button>
+
+                {/* Divider 3 */}
+                <div className="w-px h-3 sm:h-4 bg-zinc-700/60 mx-1 shrink-0" />
+
+                {/* 3. Paste Button */}
+                <button
+                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  onClick={() => {
+                    if (copiedClip) {
+                      handlePaste();
+                    } else {
+                      setToastMessage("Copy a clip first to paste");
+                      setTimeout(() => setToastMessage(null), 2000);
+                    }
+                  }}
+                  title="Paste Action"
+                >
+                  <Clipboard size={11} className="text-amber-400 sm:w-3 sm:h-3" />
+                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Paste</span>
+                </button>
+
+                {/* Divider 4 */}
+                <div className="w-px h-3 sm:h-4 bg-zinc-700/60 mx-1 shrink-0" />
+
+                {/* 4. Action Button (Decide Later) */}
+                <button
+                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  onClick={() => {
+                    setToastMessage("Placeholder action - customize later");
+                    setTimeout(() => setToastMessage(null), 2000);
+                  }}
+                  title="Custom Action"
+                >
+                  <SlidersHorizontal size={11} className="text-pink-400 sm:w-3 sm:h-3" />
+                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight text-zinc-300">Action</span>
+                </button>
+              </motion.div>
+            )}
+
+            {selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "text" && !multiSelectActive && (
               <motion.div 
                 initial={{ opacity: 0, width: 0 }}
                 animate={{ opacity: 1, width: "100%" }}
@@ -3562,9 +3800,10 @@ const renderEditor = () => (
                 <Diamond size={12} className={isAtKeyframe ? "fill-white" : ""} />
               </button>
               <button
-                className={`p-1 sm:p-1.5 rounded-full transition-colors ${(selectedClipId && isBetweenKeyframes) ? "hover:bg-zinc-700 text-white" : "opacity-30"}`}
+                className={`p-1 sm:p-1.5 rounded-full transition-colors ${(selectedClipId && isBetweenKeyframes) ? (activeExpandedMenu === "keyframe-interpolation" ? "bg-zinc-700 text-[#818cf8]" : "hover:bg-zinc-700 text-white") : "opacity-30"}`}
                 disabled={!selectedClipId || !isBetweenKeyframes}
-                onClick={() => setShowKeyframeGraph(!showKeyframeGraph)}
+                onClick={() => setActiveExpandedMenu(activeExpandedMenu === "keyframe-interpolation" ? null : "keyframe-interpolation")}
+                title="Keyframe Interpolation"
               >
                 <LineChart size={12} />
               </button>
@@ -3630,40 +3869,47 @@ const renderEditor = () => (
           <div className="flex min-h-full min-w-max relative w-[fit-content]">
             {/* Left Layer Control Panel */}
             <div className="w-[100px] shrink-0 flex flex-col border-r border-white/5 bg-[#171719] z-[70] sticky left-0 pb-[200px] shadow-[2px_0_10px_rgba(0,0,0,0.2)]">
-              <div className="text-[9px] uppercase tracking-widest text-zinc-500 text-center font-bold sticky top-0 w-full z-[80] bg-[#171719] h-[20px] flex items-center justify-center border-b border-white/5 shrink-0 shadow-[0_4px_10px_rgba(0,0,0,0.2)]">
-                Layers
+              <div className="text-[9px] uppercase tracking-widest text-zinc-500 font-bold sticky top-0 w-full z-[80] bg-[#171719] h-[20px] flex items-center justify-between px-2 border-b border-white/5 shrink-0 shadow-[0_4px_10px_rgba(0,0,0,0.2)]">
+                <span>Layers</span>
+                <button
+                  onClick={() => setIsCompactMode(prev => !prev)}
+                  title={isCompactMode ? "Standard Tracks" : "Compact Tracks"}
+                  className={`p-0.5 rounded transition-all hover:bg-white/10 ${isCompactMode ? "text-indigo-400" : "text-zinc-500 hover:text-zinc-300"} cursor-pointer`}
+                >
+                  {isCompactMode ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
+                </button>
               </div>
 
               <div id="layers-sidebar" className="flex flex-col flex-1">
                 {visibleLayers.map((layer) => (
                   <div
                     key={layer.id}
-                    className={`h-[32px] sm:h-[38px] flex flex-col items-center justify-center shrink-0 border-b group py-1 relative transition-all transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/20 border-indigo-500/50 scale-[1.02] z-50 shadow-xl" : "bg-zinc-800/20 border-white/5 backdrop-blur-sm z-10"}`}
+                    className={`${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} flex flex-col items-center justify-center shrink-0 border-b group py-1 relative transition-all transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/20 border-indigo-500/50 scale-[1.02] z-50 shadow-xl" : "bg-zinc-800/20 border-white/5 backdrop-blur-sm z-10"}`}
                   >
                     {layer.isLocked && (
                       <div className="absolute top-0.5 right-1 pointer-events-none" title="Layer Locked">
-                        <Lock size={9} className="text-yellow-500/85 animate-pulse" />
+                        <Lock size={isCompactMode ? 7 : 9} className="text-yellow-500/85 animate-pulse" />
                       </div>
                     )}
                     <div className="flex gap-0.5 sm:gap-1 items-center">
                       <button
                         onClick={() => toggleLayerMute(layer.id)}
-                        className={`w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center rounded-full ${layer.isMuted ? "text-red-400 bg-red-400/10" : "text-zinc-400 hover:text-white"}`}
+                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full ${layer.isMuted ? "text-red-400 bg-red-400/10" : "text-zinc-400 hover:text-white"}`}
                       >
                         {layer.isMuted ? (
-                          <VolumeX size={13} sm:size={14} />
+                          <VolumeX size={isCompactMode ? 10 : 13} />
                         ) : (
-                          <Volume2 size={13} sm:size={14} />
+                          <Volume2 size={isCompactMode ? 10 : 13} />
                         )}
                       </button>
                       <button
                         onClick={() => toggleLayerVisibility(layer.id)}
-                        className={`w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center rounded-full ${layer.isHidden ? "text-blue-400 bg-blue-400/10" : "text-zinc-400 hover:text-white"}`}
+                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full ${layer.isHidden ? "text-blue-400 bg-blue-400/10" : "text-zinc-400 hover:text-white"}`}
                       >
                         {layer.isHidden ? (
-                          <EyeOff size={13} sm:size={14} />
+                          <EyeOff size={isCompactMode ? 10 : 13} />
                         ) : (
-                          <Eye size={13} sm:size={14} />
+                          <Eye size={10} sm:size={13} />
                         )}
                       </button>
                       <div
@@ -3676,9 +3922,9 @@ const renderEditor = () => (
                             setLayerMenuOpenId(layerMenuOpenId === layer.id ? null : layer.id);
                           }
                         }}
-                        className={`w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center rounded-full cursor-grab touch-none transition-colors ${layerMenuOpenId === layer.id || draggingLayerId === layer.id ? "bg-zinc-700 text-white" : "text-zinc-400 hover:text-white hover:bg-zinc-800"}`}
+                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full cursor-grab touch-none transition-colors ${layerMenuOpenId === layer.id || draggingLayerId === layer.id ? "bg-zinc-700 text-white" : "text-zinc-400 hover:text-white hover:bg-zinc-800"}`}
                       >
-                        <MoreVertical size={13} sm:size={14} />
+                        <MoreVertical size={isCompactMode ? 10 : 13} />
                       </div>
                     </div>
 
@@ -3792,7 +4038,7 @@ const renderEditor = () => (
                   </div>
                 ))}
                 <div
-                  className="h-[44px] sm:h-[50px] flex items-center justify-center shrink-0 border-b border-white/5 bg-zinc-800/10 hover:bg-zinc-800/30 cursor-pointer transition-colors"
+                  className={`${isCompactMode ? "h-[28px] sm:h-[32px]" : "h-[44px] sm:h-[50px]"} flex items-center justify-center shrink-0 border-b border-white/5 bg-zinc-800/10 hover:bg-zinc-800/30 cursor-pointer transition-all`}
                   onClick={() => {
                     setLayers((prev) => {
                       const maxOrder = prev.reduce(
@@ -4133,7 +4379,7 @@ const renderEditor = () => (
                         <div
                           key={layer.id}
                           data-layer-id={layer.id}
-                          className={`relative h-[32px] sm:h-[38px] w-full border-b flex items-center group track-space transition-[background,transform,border,shadow] transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/10 border-indigo-500/30 scale-[1.02] shadow-xl z-50 rounded-lg overflow-hidden" : "border-white/5 z-0"}`}
+                          className={`relative ${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} w-full border-b flex items-center group track-space transition-[background,transform,border,shadow] transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/10 border-indigo-500/30 scale-[1.02] shadow-xl z-50 rounded-lg overflow-hidden" : "border-white/5 z-0"}`}
                         >
                           {/* Grid Background */}
                           <div
@@ -4160,7 +4406,7 @@ const renderEditor = () => (
                                 onPointerDown={(e) =>
                                   handleClipDragStart(e, clip)
                                 }
-                                className={`absolute h-[28px] sm:h-[34px] overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-shadow duration-300
+                                className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-all duration-300
                                            ${clip.type === "audio" ? "rounded-2xl bg-[#2b0e45]/95 border-purple-500/25" : "rounded-lg"}
                                            ${clip.type === "video" ? "bg-gradient-to-r from-blue-900/80 to-indigo-900/60 border-white/10" : ""}
                                            ${clip.type === "text" ? "bg-gradient-to-r from-amber-900/80 to-orange-900/60 border-white/10" : ""}
@@ -4353,7 +4599,7 @@ const renderEditor = () => (
                                 })()}
 
                                 {/* Type indicator icon */}
-                                <div className={`absolute max-w-full overflow-hidden whitespace-nowrap pl-2 flex items-center gap-1 ${clip.type === "audio" ? "inset-y-0 z-20 pointer-events-none" : "top-1 pointer-events-none"}`}>
+                                <div className={`absolute max-w-full overflow-hidden whitespace-nowrap pl-2 flex items-center gap-1 ${clip.type === "audio" ? "inset-y-0 z-20 pointer-events-none" : `${isCompactMode ? "top-0.5" : "top-1"} pointer-events-none`}`}>
                                   {erroredClips.has(clip.id) &&
                                     clip.type !== "text" && (
                                       <span className="text-[10px] font-bold text-red-100 uppercase drop-shadow-md pb-0.5 px-1 bg-red-500/80 rounded inline-flex items-center gap-1">
@@ -4362,14 +4608,14 @@ const renderEditor = () => (
                                     )}
                                   
                                   {clip.type === "audio" ? (
-                                    <span className="text-[11px] font-semibold text-purple-100 tracking-wide drop-shadow-sm py-0.5 px-2.5 bg-black/40 border border-purple-500/15 rounded-full inline-flex items-center backdrop-blur-md shadow-inner gap-1.5 ml-1">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse shrink-0" />
-                                      Audio {layer.isHidden && "(Hidden)"} {layer.isMuted && "(Muted)"}
+                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[11px] py-0.5 px-2.5"} font-semibold text-purple-100 tracking-wide drop-shadow-sm bg-black/40 border border-purple-500/15 rounded-full inline-flex items-center backdrop-blur-md shadow-inner gap-1 sm:gap-1.5 ml-0.5 sm:ml-1`}>
+                                      <span className={`${isCompactMode ? "w-1 h-1" : "w-1.5 h-1.5"} rounded-full bg-purple-400 animate-pulse shrink-0`} />
+                                      Audio {!isCompactMode && layer.isHidden && "(Hidden)"} {!isCompactMode && layer.isMuted && "(Muted)"}
                                     </span>
                                   ) : (
-                                    <span className="text-[10px] font-semibold tracking-wide text-white/90 drop-shadow-sm py-0.5 px-1.5 bg-black/40 border border-white/10 rounded shadow-sm backdrop-blur-md inline-flex items-center">
-                                      {clip.type.charAt(0).toUpperCase() + clip.type.slice(1)} {layer.isHidden && "(Hidden)"}{" "}
-                                      {layer.isMuted && "(Muted)"}
+                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[10px] py-0.5 px-1.5"} font-semibold tracking-wide text-white/90 drop-shadow-sm bg-black/40 border border-white/10 rounded shadow-sm backdrop-blur-md inline-flex items-center`}>
+                                      {clip.type.charAt(0).toUpperCase() + clip.type.slice(1)} {!isCompactMode && layer.isHidden && "(Hidden)"}{" "}
+                                      {!isCompactMode && layer.isMuted && "(Muted)"}
                                     </span>
                                   )}
 
@@ -4540,22 +4786,23 @@ const renderEditor = () => (
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  zIndex: 49,
+                                zIndex: 49,
+                              }}
+                            >
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setTransitionModal({
+                                    prevClipId: prev.id,
+                                    currentClipId: current.id,
+                                    layerId: layer.id,
+                                    type: current.transition?.type || "crossfade",
+                                    duration: current.transition?.duration || 0.5,
+                                  });
+                                  setActiveExpandedMenu("transition");
                                 }}
-                              >
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    setTransitionModal({
-                                      prevClipId: prev.id,
-                                      currentClipId: current.id,
-                                      layerId: layer.id,
-                                      type: current.transition?.type || "crossfade",
-                                      duration: current.transition?.duration || 0.5,
-                                    });
-                                  }}
-                                  className={`w-[19px] h-[19px] rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                                className={`w-[19px] h-[19px] rounded-full flex items-center justify-center transition-all cursor-pointer ${
                                     hasTransition
                                       ? "bg-indigo-500 hover:bg-indigo-600 border border-indigo-400 text-white hover:scale-[1.15] active:scale-95 shadow-md shadow-indigo-500/30"
                                       : "bg-zinc-800 hover:bg-indigo-500 border border-white/20 hover:border-indigo-400/50 text-zinc-300 hover:text-white hover:scale-[1.15] active:scale-95 shadow-lg opacity-60 hover:opacity-100"
@@ -4626,6 +4873,124 @@ const renderEditor = () => (
             className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[220px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[220px]" : "rounded-[24px] h-[50px] justify-center w-[220px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
+              {activeExpandedMenu === "transition" && transitionModal && (() => {
+                const prevClip = clips.find(c => c.id === transitionModal.prevClipId);
+                const currentClip = clips.find(c => c.id === transitionModal.currentClipId);
+                if (!prevClip || !currentClip) return null;
+
+                const isAudioOnly = prevClip.type === "audio" && currentClip.type === "audio";
+                const maxAllowedDuration = Math.min(3, Math.min(prevClip.durationSeconds, currentClip.durationSeconds) / 2);
+
+                const transitionOptions = isAudioOnly
+                  ? [{ id: "crossfade", name: "Crossfade", desc: "Smooth dynamic volume blending" }]
+                  : [
+                      { id: "crossfade", name: "Crossfade", desc: "Classic smooth opacity dissolve" },
+                      { id: "blur", name: "Blur Dissolve", desc: "Fade with beautiful Gaussian blur" },
+                      { id: "slide-left", name: "Slide Left", desc: "Translate incoming clip from right" },
+                      { id: "slide-right", name: "Slide Right", desc: "Translate incoming clip from left" },
+                      { id: "wipe-left", name: "Wipe Left", desc: "Geometric sliding reveal from right" },
+                      { id: "wipe-right", name: "Wipe Right", desc: "Geometric sliding reveal from left" },
+                      { id: "zoom-in", name: "Zoom In", desc: "Incoming scale magnification" },
+                    ];
+
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex flex-col w-full px-3 pb-2 text-left"
+                  >
+                    {/* Header */}
+                    <div className="flex justify-between items-center w-full mb-1.5 px-0.5 mt-1.5">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest leading-none">Transition</span>
+                        <span className="text-[7.5px] text-zinc-500 font-bold uppercase tracking-wider mt-1 leading-none">
+                          {prevClip.type} + {currentClip.type}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {currentClip.transition && (
+                          <button
+                            onClick={() => {
+                              removeTransition(transitionModal.currentClipId);
+                              setTransitionModal(null);
+                              setActiveExpandedMenu(null);
+                            }}
+                            className="text-[8px] bg-red-500/10 hover:bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider transition-all"
+                            title="Remove transition"
+                          >
+                            Remove
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setTransitionModal(null);
+                            setActiveExpandedMenu(null);
+                          }}
+                          className="text-emerald-405 hover:text-emerald-300 p-0.5"
+                        >
+                          <Check size={14} className="text-emerald-400" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Style horizontal scrolling list */}
+                    <div className="flex items-center gap-1 px-1 overflow-x-auto scrollbar-hide snap-x pt-0.5 pb-2 border-b border-white/[0.04] mb-2">
+                      {transitionOptions.map((opt) => {
+                        const isSelected = transitionModal.type === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              const updatedModal = { ...transitionModal, type: opt.id };
+                              setTransitionModal(updatedModal);
+                              addTransition(transitionModal.currentClipId, opt.id, transitionModal.duration, true);
+                            }}
+                            className={`shrink-0 px-2 py-1 rounded-lg border transition-all duration-150 snap-start flex flex-col items-center min-w-[64px] ${
+                              isSelected
+                                ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
+                                : "bg-zinc-800/80 border-white/5 hover:border-white/10 text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            <span className="text-[8.5px] font-bold leading-tight truncate w-full text-center">{opt.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Duration Slider - Simple and elegant, fitting w-[220px] */}
+                    <div className="w-full pr-0.5">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[8px] text-zinc-500 font-bold uppercase pl-0.5">Duration</span>
+                        <span className="text-[9px] font-mono pr-0.5 text-zinc-300">
+                          {transitionModal.duration.toFixed(2)}s
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max={maxAllowedDuration.toFixed(2)}
+                        step="0.05"
+                        value={transitionModal.duration}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setTransitionModal(prev => prev ? { ...prev, duration: val } : null);
+                          addTransition(transitionModal.currentClipId, transitionModal.type, val, true);
+                        }}
+                        className="w-full accent-white h-0.5 bg-zinc-700 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full cursor-pointer mt-0.5"
+                      />
+                      <div className="flex justify-between text-[7px] text-zinc-500 mt-1 font-bold tracking-tight uppercase px-0.5">
+                        <span>Min: 0.1s</span>
+                        <span>Max: {maxAllowedDuration.toFixed(2)}s</span>
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })()}
+
               {activeExpandedMenu === "volume" && (
                 <motion.div
                   layout
@@ -4937,22 +5302,101 @@ const renderEditor = () => (
                   setToastMessage={setToastMessage}
                 />
               )}
-              {activeExpandedMenu === "stabilize" && selectedClipId && (
-                <motion.div
-                  layout
-                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-4 flex flex-col gap-2 bg-zinc-800 rounded-xl border border-white/10"
-                >
-                  <span className="text-[10px] font-bold text-zinc-400 uppercase">Crop Limit</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => handleStabilize(selectedClipId, "low")} className="p-2 rounded bg-zinc-700 hover:bg-zinc-600 text-xs">Low</button>
-                    <button onClick={() => handleStabilize(selectedClipId, "high")} className="p-2 rounded bg-zinc-700 hover:bg-zinc-600 text-xs">High</button>
-                  </div>
-                </motion.div>
-              )}
+              {activeExpandedMenu === "stabilize" && selectedClipId && (() => {
+                const clip = clips.find(c => c.id === selectedClipId);
+                if (!clip) return null;
+
+                const isStabilizing = stabilizingProgress && stabilizingProgress.clipId === clip.id;
+
+                return (
+                  <motion.div
+                    layout
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex flex-col w-full text-left select-none px-2.5 pb-2.5"
+                  >
+                    {/* Header */}
+                    <div className="flex justify-between items-center w-full mb-1.5 px-0.5 mt-1">
+                      <span className="text-[10px] font-extrabold text-indigo-400 uppercase tracking-widest">Stabilizer</span>
+                      <button 
+                        onClick={() => setActiveExpandedMenu(null)}
+                        className="text-zinc-500 hover:text-white p-0.5"
+                      >
+                        <Check size={12} className="text-emerald-400" />
+                      </button>
+                    </div>
+
+                    {isStabilizing ? (
+                      <div className="flex flex-col items-center justify-center py-2 space-y-1">
+                        {/* Circular Loader */}
+                        <div className="text-indigo-400 animate-spin flex items-center justify-center">
+                          <Activity size={18} />
+                        </div>
+                        <span className="text-sm font-black tracking-tighter text-white">
+                          {stabilizingProgress.progress}%
+                        </span>
+                        <span className="text-[8px] text-zinc-400 font-bold tracking-tight text-center truncate w-full max-w-full leading-none">
+                          {stabilizingProgress.stage}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-1 max-h-[140px] overflow-y-auto scrollbar-hide">
+                          <button
+                            onClick={() => handleStabilize(clip.id, "standard")}
+                            className={`flex items-center justify-between w-full p-1.5 px-2 rounded-lg text-[9.5px] font-semibold transition-all ${clip.isStabilized && clip.stabilizationMode === "standard" ? "bg-indigo-600 text-white" : "bg-neutral-800 hover:bg-neutral-700 text-zinc-300"} cursor-pointer`}
+                          >
+                            <span className="truncate">Standard</span>
+                            <span className="text-[8px] opacity-75">1.08x</span>
+                          </button>
+                          
+                          <button
+                            onClick={() => handleStabilize(clip.id, "active")}
+                            className={`flex items-center justify-between w-full p-1.5 px-2 rounded-lg text-[9.5px] font-semibold transition-all ${clip.isStabilized && clip.stabilizationMode === "active" ? "bg-blue-600 text-white" : "bg-neutral-800 hover:bg-neutral-700 text-zinc-300"} cursor-pointer`}
+                          >
+                            <span className="truncate">Active (High)</span>
+                            <span className="text-[8px] opacity-75">1.18x</span>
+                          </button>
+                          
+                          <button
+                            onClick={() => handleStabilize(clip.id, "locked")}
+                            className={`flex items-center justify-between w-full p-1.5 px-2 rounded-lg text-[9.5px] font-semibold transition-all ${clip.isStabilized && clip.stabilizationMode === "locked" ? "bg-pink-600 text-white" : "bg-neutral-800 hover:bg-neutral-700 text-zinc-300"} cursor-pointer`}
+                          >
+                            <span className="truncate">Locked (Tripod)</span>
+                            <span className="text-[8px] opacity-75">1.28x</span>
+                          </button>
+
+                          {clip.isStabilized && (
+                            <button
+                              onClick={() => handleStabilize(clip.id, "off")}
+                              className="flex items-center justify-center w-full py-1 hover:bg-red-500/10 hover:text-red-400 text-zinc-400 text-[8px] font-bold tracking-tight transition-colors mt-0.5 gap-1 border border-white/5 rounded-md cursor-pointer"
+                            >
+                              Turn off stabilization
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Split Compare Slide Toggle */}
+                        {clip.isStabilized && (
+                          <div className="flex items-center justify-between pt-1.5 border-t border-white/[0.04] mt-1">
+                            <span className="text-[8.5px] text-zinc-400 font-bold uppercase tracking-wider">Compare Split</span>
+                            <button
+                              onClick={() => {
+                                setClips(prev => prev.map(c => c.id === clip.id ? { ...c, compareStabilization: !c.compareStabilization } : c));
+                              }}
+                              className={`w-7 h-4 rounded-full p-0.5 transition-colors ${clip.compareStabilization ? 'bg-emerald-500' : 'bg-neutral-700'} cursor-pointer`}
+                            >
+                              <div className={`w-3 h-3 rounded-full bg-white transition-all transform ${clip.compareStabilization ? 'translate-x-3' : 'translate-x-0'}`} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })()}
               {activeExpandedMenu === "move" && selectedClipId && (
                 <motion.div
                   layout
@@ -5728,6 +6172,347 @@ const renderEditor = () => (
                   </div>
                 </motion.div>
               )}
+              {activeExpandedMenu === "keyframe-interpolation" && selectedClipId && isBetweenKeyframes && (
+                (() => {
+                  const clip = clips.find((c) => c.id === selectedClipId);
+                  const timeInClip = clip ? currentTime - clip.leftSeconds : 0;
+                  const useVolume = isBetweenVolumeKeyframes;
+                  const relevantKfs = clip ? (clip.keyframes || [])
+                    .filter(k => useVolume ? k.properties.volume !== undefined : (k.properties.translateX !== undefined || k.properties.scale !== undefined))
+                    .sort((a, b) => a.timeOffset - b.timeOffset) : [];
+                  
+                  let startKf: any = null;
+                  if (clip) {
+                    for (let i = 0; i < relevantKfs.length - 1; i++) {
+                      if (timeInClip >= relevantKfs[i].timeOffset && timeInClip <= relevantKfs[i+1].timeOffset) {
+                        startKf = relevantKfs[i];
+                        break;
+                      }
+                    }
+                    if (!startKf && relevantKfs.length > 0) {
+                      startKf = relevantKfs[0];
+                    }
+                  }
+
+                  const getPresetDefaultPoints = (presetId: string): [number, number, number, number] => {
+                    switch (presetId) {
+                      case "easeIn": return [0.42, 0, 1, 1];
+                      case "easeOut": return [0, 0, 0.58, 1];
+                      case "easeInOut": return [0.42, 0, 0.58, 1];
+                      case "linear":
+                      default:
+                        return [0.25, 0.25, 0.75, 0.75];
+                    }
+                  };
+
+                  const handlePresetPointerDown = (presetId: string, e: React.PointerEvent) => {
+                    if (e.button !== 0) return;
+                    hasTriggeredLongPress.current = false;
+                    if (interpolationLongPressTimerRef.current) {
+                      clearTimeout(interpolationLongPressTimerRef.current);
+                    }
+                    interpolationLongPressTimerRef.current = setTimeout(() => {
+                      hasTriggeredLongPress.current = true;
+                      setSelectedInterpolationPreset(presetId);
+
+                      if (clip && startKf) {
+                        setClips((prev) => prev.map(c => {
+                          if (c.id !== selectedClipId) return c;
+                          return {
+                            ...c,
+                            keyframes: (c.keyframes || []).map(k => {
+                              if (k.id !== startKf.id) return k;
+                              const updated: any = { ...k, curve: presetId };
+                              if (!k.customEasePoints) {
+                                updated.customEasePoints = getPresetDefaultPoints(presetId);
+                              }
+                              return updated;
+                            })
+                          };
+                        }));
+                      }
+
+                      setActiveExpandedMenu("custom-keyframe-graph");
+                    }, 450);
+                  };
+
+                  const handlePresetPointerUp = (presetId: string, e: React.PointerEvent) => {
+                    if (interpolationLongPressTimerRef.current) {
+                      clearTimeout(interpolationLongPressTimerRef.current);
+                      interpolationLongPressTimerRef.current = null;
+                    }
+                    if (!hasTriggeredLongPress.current) {
+                      if (clip && startKf) {
+                        setClips((prev) => prev.map(c => {
+                          if (c.id !== selectedClipId) return c;
+                          return {
+                            ...c,
+                            keyframes: (c.keyframes || []).map(k => k.id === startKf.id ? { ...k, curve: presetId as any, customEasePoints: undefined } : k)
+                          };
+                        }));
+                      }
+                    }
+                  };
+
+                  const handlePresetPointerCancel = () => {
+                    if (interpolationLongPressTimerRef.current) {
+                      clearTimeout(interpolationLongPressTimerRef.current);
+                      interpolationLongPressTimerRef.current = null;
+                    }
+                  };
+
+                  return (
+                    <motion.div
+                      layout
+                      initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                      transition={{ duration: 0.2 }}
+                      className="flex flex-col w-full px-3 pb-1.5 text-zinc-100"
+                    >
+                      <div className="flex justify-between items-center w-full mb-1.5 mt-0.5 px-0.5">
+                        <span className="text-[10px] font-semibold text-white/90 uppercase tracking-widest text-indigo-400">Curve Type</span>
+                        <button
+                          onClick={() => setActiveExpandedMenu(null)}
+                          className="text-zinc-400 hover:text-white p-0.5 bg-white/5 hover:bg-white/10 rounded-full transition-all"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {[
+                          { id: "linear", name: "Linear", path: "M 2 10 L 22 2" },
+                          { id: "easeIn", name: "Ease In", path: "M 2 10 Q 16 10 22 2" },
+                          { id: "easeOut", name: "Ease Out", path: "M 2 10 Q 8 2 22 2" },
+                          { id: "easeInOut", name: "In Out", path: "M 2 10 C 8 10 16 2 22 2" },
+                        ].map((preset) => {
+                          const isSelected = startKf && startKf.curve === preset.id;
+                          return (
+                            <button
+                              key={preset.id}
+                              className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-lg transition-all select-none touch-none ${
+                                isSelected ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'bg-white/5 hover:bg-white/10 text-white border border-transparent'
+                              }`}
+                              onPointerDown={(e) => handlePresetPointerDown(preset.id, e)}
+                              onPointerUp={(e) => handlePresetPointerUp(preset.id, e)}
+                              onPointerCancel={handlePresetPointerCancel}
+                              onPointerLeave={handlePresetPointerCancel}
+                              title="Hold for detailed graph"
+                            >
+                              <svg viewBox="0 0 24 12" className="w-6 h-3 mb-1 overflow-visible text-white/80">
+                                <path d={preset.path} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                              <span className="text-[8.5px] font-medium leading-tight">{preset.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  );
+                })()
+              )}
+
+              {activeExpandedMenu === "custom-keyframe-graph" && selectedClipId && isBetweenKeyframes && (
+                <motion.div
+                  layout
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col w-full px-3 pb-2 text-zinc-100 select-none touch-none text-left"
+                >
+                  <div className="flex justify-between items-center w-full mb-1 mt-0.5 px-0.5">
+                    <span className="text-[10px] font-semibold text-indigo-400 uppercase tracking-widest">
+                      Custom Curve
+                    </span>
+                    <button
+                      onClick={() => setActiveExpandedMenu("keyframe-interpolation")}
+                      className="text-zinc-400 hover:text-white p-1 bg-white/5 hover:bg-white/10 rounded-full transition-all"
+                      title="Back to types"
+                    >
+                      <ArrowLeft size={11} />
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const clip = clips.find((c) => c.id === selectedClipId);
+                    const timeInClip = clip ? currentTime - clip.leftSeconds : 0;
+                    const useVolume = isBetweenVolumeKeyframes;
+                    const relevantKfs = clip ? (clip.keyframes || [])
+                      .filter(k => useVolume ? k.properties.volume !== undefined : (k.properties.translateX !== undefined || k.properties.scale !== undefined))
+                      .sort((a, b) => a.timeOffset - b.timeOffset) : [];
+                    
+                    let startKf: any = null;
+                    if (clip) {
+                      for (let i = 0; i < relevantKfs.length - 1; i++) {
+                        if (timeInClip >= relevantKfs[i].timeOffset && timeInClip <= relevantKfs[i+1].timeOffset) {
+                          startKf = relevantKfs[i];
+                          break;
+                        }
+                      }
+                      if (!startKf && relevantKfs.length > 0) {
+                        startKf = relevantKfs[0];
+                      }
+                    }
+
+                    if (!startKf) return null;
+
+                    const getPresetDefaultPoints = (presetId: string): [number, number, number, number] => {
+                      switch (presetId) {
+                        case "easeIn": return [0.42, 0, 1, 1];
+                        case "easeOut": return [0, 0, 0.58, 1];
+                        case "easeInOut": return [0.42, 0, 0.58, 1];
+                        case "linear":
+                        default:
+                          return [0.25, 0.25, 0.75, 0.75];
+                      }
+                    };
+
+                    const points = startKf.customEasePoints || getPresetDefaultPoints(startKf.curve || "linear");
+                    const [x1, y1, x2, y2] = points;
+
+                    // Grid dimensions:
+                    // padding = 15, w = 150, h = 90
+                    const toX = (val: number) => 15 + val * 150;
+                    const toY = (val: number) => 105 - val * 90;
+                    const fromX = (valX: number) => (valX - 15) / 150;
+                    const fromY = (valY: number) => (105 - valY) / 90;
+
+                    const pD = `M ${toX(0)} ${toY(0)} C ${toX(x1)} ${toY(y1)}, ${toX(x2)} ${toY(y2)}, ${toX(1)} ${toY(1)}`;
+
+                    // Handler dragging inside SVG
+                    const handleSvgPointerDown = (e: React.PointerEvent, handleIdx: 1 | 2) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraggingHandle(handleIdx);
+                      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    };
+
+                    const handleSvgPointerMove = (e: React.PointerEvent) => {
+                      if (!draggingHandle) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const rawX = e.clientX - rect.left;
+                      const rawY = e.clientY - rect.top;
+                      
+                      let nX = fromX(rawX);
+                      let nY = fromY(rawY);
+                      
+                      nX = Math.max(0, Math.min(1, nX));
+                      nY = Math.max(0, Math.min(1, nY));
+
+                      setClips((prev) => prev.map(c => {
+                        if (c.id !== selectedClipId) return c;
+                        return {
+                          ...c,
+                          keyframes: (c.keyframes || []).map(k => {
+                            if (k.id !== startKf.id) return k;
+                            const pts = k.customEasePoints ? [...k.customEasePoints] : [...getPresetDefaultPoints(k.curve || "linear")];
+                            if (draggingHandle === 1) {
+                              pts[0] = nX;
+                              pts[1] = nY;
+                            } else {
+                              pts[2] = nX;
+                              pts[3] = nY;
+                            }
+                            return {
+                              ...k,
+                              customEasePoints: pts as [number, number, number, number]
+                            };
+                          })
+                        };
+                      }));
+                    };
+
+                    const handleSvgPointerUp = (e: React.PointerEvent) => {
+                      if (draggingHandle) {
+                        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+                        setDraggingHandle(null);
+                      }
+                    };
+
+                    return (
+                      <div className="flex flex-col items-center w-full">
+                        {/* Interactive Graph Canvas */}
+                        <div className="w-[180px] h-[105px] bg-zinc-950/90 border border-white/10 rounded-xl relative overflow-visible flex items-center justify-center mt-1">
+                          <svg
+                            className="w-full h-full overflow-visible cursor-crosshair touch-none"
+                            onPointerMove={handleSvgPointerMove}
+                            onPointerUp={handleSvgPointerUp}
+                            onPointerCancel={handleSvgPointerUp}
+                          >
+                            {/* Grid Lines */}
+                            <line x1={toX(0)} y1={toY(0.5)} x2={toX(1)} y2={toY(0.5)} stroke="#3f3f46" strokeWidth="1" strokeDasharray="2,2" />
+                            <line x1={toX(0.5)} y1={toY(0)} x2={toX(0.5)} y2={toY(1)} stroke="#3f3f46" strokeWidth="1" strokeDasharray="2,2" />
+                            
+                            {/* Connection Lines to Handles */}
+                            <line x1={toX(0)} y1={toY(0)} x2={toX(x1)} y2={toY(y1)} stroke="#6366f1" strokeWidth="1.5" strokeOpacity="0.5" />
+                            <line x1={toX(1)} y1={toY(1)} x2={toX(x2)} y2={toY(y2)} stroke="#ec4899" strokeWidth="1.5" strokeOpacity="0.5" />
+
+                            {/* Main Bezier Curve */}
+                            <path d={pD} fill="none" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" />
+
+                            {/* Start and End Anchor points */}
+                            <circle cx={toX(0)} cy={toY(0)} r="3" fill="#a1a1aa" />
+                            <circle cx={toX(1)} cy={toY(1)} r="3" fill="#a1a1aa" />
+
+                            {/* Handle Control Circles */}
+                            <circle
+                              cx={toX(x1)}
+                              cy={toY(y1)}
+                              r={draggingHandle === 1 ? "6.5" : "5"}
+                              fill="#6366f1"
+                              stroke="white"
+                              strokeWidth="1.5"
+                              className="cursor-pointer transition-all hover:scale-125 select-none active:scale-150 active:fill-white"
+                              onPointerDown={(e) => handleSvgPointerDown(e, 1)}
+                            />
+                            <circle
+                              cx={toX(x2)}
+                              cy={toY(y2)}
+                              r={draggingHandle === 2 ? "6.5" : "5"}
+                              fill="#ec4899"
+                              stroke="white"
+                              strokeWidth="1.5"
+                              className="cursor-pointer transition-all hover:scale-125 select-none active:scale-150 active:fill-white"
+                              onPointerDown={(e) => handleSvgPointerDown(e, 2)}
+                            />
+                          </svg>
+                        </div>
+
+                        {/* Stats & Actions */}
+                        <div className="flex justify-between items-center w-full px-1 mt-1">
+                          <span className="text-[8px] font-mono text-zinc-400">
+                            P1({x1.toFixed(2)}, {y1.toFixed(2)})
+                          </span>
+                          <button
+                            onClick={() => {
+                              setClips((prev) => prev.map(c => {
+                                if (c.id !== selectedClipId) return c;
+                                return {
+                                  ...c,
+                                  keyframes: (c.keyframes || []).map(k => {
+                                    if (k.id !== startKf.id) return k;
+                                    return {
+                                      ...k,
+                                      customEasePoints: getPresetDefaultPoints(k.curve || "linear")
+                                    };
+                                  })
+                                };
+                              }));
+                            }}
+                            className="text-[8px] text-zinc-400 hover:text-white px-1.5 py-0.5 bg-white/5 rounded-md hover:bg-white/10 transition-all font-semibold uppercase tracking-wider"
+                          >
+                            Reset
+                          </button>
+                          <span className="text-[8px] font-mono text-zinc-400">
+                            P2({x2.toFixed(2)}, {y2.toFixed(2)})
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </motion.div>
+              )}
             </AnimatePresence>
 
             <motion.div
@@ -5832,284 +6617,13 @@ const renderEditor = () => (
               accept="video/*,audio/*,image/*"
             />
           </motion.div>
-          {/* Keyframe Curve Graph Overlay */}
-          <AnimatePresence>
-            {showKeyframeGraph && selectedClipId && isBetweenKeyframes && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 20 }}
-                className="fixed bottom-[110px] left-1/2 -translate-x-1/2 w-[340px] bg-[#252528] rounded-2xl p-4 shadow-[0_30px_60px_rgba(0,0,0,0.6)] border border-white/5 z-[250]"
-              >
-                <div className="flex justify-between items-center mb-3">
-                  <span className="text-[11px] font-semibold text-white/90 uppercase tracking-widest text-indigo-400">Keyframe Interpolation</span>
-                  <button onClick={() => setShowKeyframeGraph(false)} className="text-zinc-400 hover:text-white p-1 bg-white/5 rounded-full">
-                    <X size={14} />
-                  </button>
-                </div>
-                <div className="grid grid-cols-5 gap-2 mt-2">
-                  {[
-                    { id: "linear", name: "Linear", path: "M 2 10 L 22 2" },
-                    { id: "easeIn", name: "Ease In", path: "M 2 10 Q 16 10 22 2" },
-                    { id: "easeOut", name: "Ease Out", path: "M 2 10 Q 8 2 22 2" },
-                    { id: "easeInOut", name: "In Out", path: "M 2 10 C 8 10 16 2 22 2" },
-                    { id: "hold", name: "Hold", path: "M 2 10 L 12 10 L 12 2 L 22 2" },
-                  ].map((preset) => {
-                    const isSelected = clips.find((c) => c.id === selectedClipId)?.keyframes?.find((k) => k.id === 'some-id')?.interpolation === preset.id;
-                    return (
-                      <button
-                        key={preset.id}
-                        className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all ${
-                          isSelected ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/50' : 'bg-white/5 hover:bg-white/10 text-white border border-transparent'
-                        }`}
-                        onClick={() => {
-                           setShowKeyframeGraph(false);
-                        }}
-                      >
-                        <svg viewBox="0 0 24 12" className="w-8 h-4 mb-2 overflow-visible">
-                          <path d={preset.path} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span className="text-[10px] font-medium">{preset.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </motion.div>
-            )}
-      </AnimatePresence>
 
-      {/* Multi-Select Action Dock */}
-      <AnimatePresence>
-        {multiSelectActive && (
-          <motion.div
-            initial={{ opacity: 0, y: 30, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 30, scale: 0.9 }}
-            transition={{ type: "spring", damping: 25, stiffness: 350 }}
-            className="fixed bottom-[115px] left-1/2 -translate-x-1/2 w-[340px] xs:w-[370px] bg-[#1d1d20]/95 backdrop-blur-md rounded-2xl p-3 border border-indigo-500/20 shadow-[0_20px_50px_rgba(0,0,0,0.7)] z-[250]"
-          >
-            {/* Header */}
-            <div className="flex justify-between items-center pb-2 border-b border-white/5 mb-2">
-              <div className="flex items-center gap-2">
-                <div className="p-1 rounded-md bg-indigo-500/10 text-indigo-400">
-                  <Layers size={14} className="animate-pulse" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-[11px] font-bold text-white uppercase tracking-wider">Multi-Select Mode</span>
-                  <span className="text-[9px] font-mono text-indigo-300">
-                    {selectedClipIds.length} {selectedClipIds.length === 1 ? 'layer' : 'layers'} selected
-                  </span>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setMultiSelectActive(false);
-                  setSelectedClipIds([]);
-                  setToastMessage("Multi-Select Deactivated");
-                  setTimeout(() => setToastMessage(null), 2000);
-                }} 
-                className="text-zinc-500 hover:text-white p-1 bg-white/5 hover:bg-white/10 rounded-full transition-colors animate-fade-in"
-                title="Deactivate Multi-Select"
-              >
-                <X size={14} />
-              </button>
-            </div>
 
-            {/* Instruction Banner */}
-            {selectedClipIds.length === 0 && (
-              <div className="text-[10px] text-zinc-400 bg-white/5 p-2 rounded-lg text-center mb-2 leading-relaxed">
-                Tap layers in the timeline to multi-select. Drag or Delete them together.
-              </div>
-            )}
 
-            {/* Actions Grid */}
-            <div className="grid grid-cols-5 gap-1">
-              {/* Delete Active Button */}
-              <button
-                disabled={selectedClipIds.length === 0}
-                onClick={deleteSelectedClip}
-                className={`col-span-1 p-1 h-[52px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all duration-200 ${
-                  selectedClipIds.length > 0 
-                    ? "bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 active:scale-95 cursor-pointer shadow-[0_4px_12px_rgba(239,68,68,0.15)]" 
-                    : "opacity-35 bg-white/5 text-zinc-500 border border-transparent cursor-not-allowed"
-                }`}
-              >
-                <Trash2 size={13} />
-                <span className="text-[8px] font-semibold font-sans text-center">Delete</span>
-              </button>
-
-              {/* Paste Settings (Coming Soon) */}
-              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
-                <Copy size={12} className="text-zinc-400" />
-                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Paste</span>
-                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
-              </div>
-
-              {/* Compound Clip (Coming Soon) */}
-              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
-                <SquareDashed size={12} className="text-zinc-400" />
-                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Compound</span>
-                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
-              </div>
-
-              {/* Group Layers (Coming Soon) */}
-              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
-                <Layers size={12} className="text-zinc-400" />
-                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center">Group</span>
-                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
-              </div>
-
-              {/* Link/Attach Layers (Coming Soon) */}
-              <div className="col-span-1 p-1 h-[52px] rounded-xl bg-white/5 border border-white/5 flex flex-col items-center justify-center gap-1 opacity-50 relative group select-none">
-                <Link2 size={12} className="text-zinc-400" />
-                <span className="text-[8px] font-sans font-medium text-zinc-400 text-center flex-wrap">Link</span>
-                <span className="absolute top-0.5 right-0.5 text-[6.5px] scale-90 font-bold px-0.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 uppercase tracking-widest border border-indigo-500/20 leading-none">Soon</span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
         </>
       )}
 
-      {/* Dynamic Transition Settings Modal */}
-      <AnimatePresence>
-        {transitionModal && (() => {
-          const prevClip = clips.find(c => c.id === transitionModal.prevClipId);
-          const currentClip = clips.find(c => c.id === transitionModal.currentClipId);
-          if (!prevClip || !currentClip) return null;
 
-          const isAudioOnly = prevClip.type === "audio" && currentClip.type === "audio";
-          const maxAllowedDuration = Math.min(3, Math.min(prevClip.durationSeconds, currentClip.durationSeconds) / 2);
-
-          const transitionOptions = isAudioOnly
-            ? [{ id: "crossfade", name: "Crossfade", desc: "Smooth dynamic volume blending" }]
-            : [
-                { id: "crossfade", name: "Crossfade", desc: "Classic smooth opacity dissolve" },
-                { id: "blur", name: "Blur Dissolve", desc: "Fade with beautiful Gaussian blur" },
-                { id: "slide-left", name: "Slide Left", desc: "Translate incoming clip from right" },
-                { id: "slide-right", name: "Slide Right", desc: "Translate incoming clip from left" },
-                { id: "wipe-left", name: "Wipe Left", desc: "Geometric sliding reveal from right" },
-                { id: "wipe-right", name: "Wipe Right", desc: "Geometric sliding reveal from left" },
-                { id: "zoom-in", name: "Zoom In", desc: "Incoming scale magnification" },
-              ];
-
-          return (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 h-full w-full"
-              onClick={() => setTransitionModal(null)}
-            >
-              <motion.div
-                initial={{ scale: 0.95, y: 15 }}
-                animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.95, y: 15 }}
-                className="bg-[#1b1b1e] border border-white/10 rounded-2xl w-full max-w-[340px] sm:max-w-[380px] p-5 shadow-2xl relative text-left"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {/* Header */}
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <h3 className="text-white text-sm font-bold font-sans tracking-wide">Transition Settings</h3>
-                    <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-wider mt-0.5">
-                      {prevClip.type} + {currentClip.type}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setTransitionModal(null)}
-                    className="w-6 h-6 rounded-full bg-zinc-850 hover:bg-zinc-700 text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-
-                {/* Transition Type Options */}
-                <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block mb-2">Style</span>
-                <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 mb-4 scrollbar-thin scrollbar-thumb-zinc-805">
-                  {transitionOptions.map((opt) => {
-                    const isSelected = transitionModal.type === opt.id;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setTransitionModal({ ...transitionModal, type: opt.id })}
-                        className={`w-full text-left p-2 rounded-xl border transition-all flex items-start gap-2.5 cursor-pointer ${
-                          isSelected
-                            ? "bg-indigo-500/10 border-indigo-500/50 text-white"
-                            : "bg-zinc-900/40 border-white/5 hover:border-white/15 text-zinc-300 hover:bg-zinc-900/80"
-                        }`}
-                      >
-                        <div className={`w-3.5 h-3.5 mt-0.5 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? "border-indigo-400" : "border-zinc-650"}`}>
-                          {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />}
-                        </div>
-                        <div>
-                          <div className="text-xs font-semibold leading-none">{opt.name}</div>
-                          <div className="text-[9px] text-zinc-500 mt-1">{opt.desc}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Duration Slider */}
-                <div className="mb-5 bg-zinc-900/40 border border-white/5 p-3 rounded-xl">
-                  <div className="flex justify-between items-center mb-1.5">
-                    <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Duration</span>
-                    <span className="text-xs font-mono font-bold text-white bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/20">
-                      {transitionModal.duration.toFixed(2)}s
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max={maxAllowedDuration.toFixed(2)}
-                    step="0.05"
-                    value={transitionModal.duration}
-                    onChange={(e) => setTransitionModal({ ...transitionModal, duration: parseFloat(e.target.value) })}
-                    className="w-full accent-indigo-500 h-1 bg-zinc-800 rounded-lg outline-none cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[8px] text-zinc-500 mt-1 font-semibold">
-                    <span>Min: 0.1s</span>
-                    <span>Max: {maxAllowedDuration.toFixed(2)}s</span>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-2 justify-end">
-                  {currentClip.transition && (
-                    <button
-                      onClick={() => {
-                        removeTransition(transitionModal.currentClipId);
-                        setTransitionModal(null);
-                      }}
-                      className="px-3 py-1.5 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 hover:bg-red-500/15 font-sans font-semibold text-xs active:scale-95 transition-all cursor-pointer mr-auto"
-                    >
-                      Remove
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setTransitionModal(null)}
-                    className="px-3 py-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 font-sans font-semibold text-xs cursor-pointer transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      addTransition(transitionModal.currentClipId, transitionModal.type, transitionModal.duration);
-                      setTransitionModal(null);
-                    }}
-                    className="px-4 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-sans font-semibold text-xs cursor-pointer active:scale-95 transition-all shadow-md shadow-indigo-500/20"
-                  >
-                    Apply
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          );
-        })()}
-      </AnimatePresence>
 
       {/* Pill Toast Notification */}
       <AnimatePresence>

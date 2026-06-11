@@ -1283,6 +1283,9 @@ export default function App() {
     duration: number,
     startAtTime: number,
     fileId?: string,
+    width?: number,
+    height?: number,
+    fps?: number,
   ) => {
     const newLayerId = "L_" + id;
     setLayers((prev) => {
@@ -1310,6 +1313,9 @@ export default function App() {
         durationSeconds: duration,
         originalDurationSeconds: duration,
         trimStartSeconds: 0,
+        width,
+        height,
+        fps,
       },
     ]);
   };
@@ -1377,15 +1383,67 @@ export default function App() {
     }
 
     if (type === "video" || type === "audio") {
-      const media =
-        type === "video"
-          ? document.createElement("video")
-          : document.createElement("audio");
-      media.preload = "metadata";
-      media.onloadedmetadata = () => {
-        addMediaClip(id, type, src, media.duration || 10, startAtTime, fileId);
-      };
-      media.src = src;
+      try {
+        setPillPopup({ message: "Parsing video structures...", type: 'loading' });
+        const { loadVideoMetadata } = await import("./lib/opticalFlow");
+        const metadata = await loadVideoMetadata(file);
+        
+        setPillPopup({
+          message: `Loaded: ${metadata.width}x${metadata.height} @ ${Math.round(metadata.fps)} FPS`,
+          type: 'info'
+        });
+        setTimeout(() => setPillPopup(null), 3500);
+
+        addMediaClip(
+          id,
+          type,
+          src,
+          (metadata.durationMs / 1000) || 10,
+          startAtTime,
+          fileId,
+          metadata.width,
+          metadata.height,
+          metadata.fps
+        );
+      } catch (metaErr) {
+        console.warn("Unified metadata load failed, using DOM fallback:", metaErr);
+        setPillPopup(null);
+        if (type === "video") {
+          const video = document.createElement("video");
+          video.preload = "metadata";
+          video.onloadedmetadata = () => {
+            addMediaClip(
+              id,
+              type,
+              src,
+              video.duration || 10,
+              startAtTime,
+              fileId,
+              video.videoWidth,
+              video.videoHeight,
+              30
+            );
+          };
+          video.src = src;
+        } else {
+          const audio = document.createElement("audio");
+          audio.preload = "metadata";
+          audio.onloadedmetadata = () => {
+            addMediaClip(
+              id,
+              type,
+              src,
+              audio.duration || 10,
+              startAtTime,
+              fileId,
+              undefined,
+              undefined,
+              30
+            );
+          };
+          audio.src = src;
+        }
+      }
     } else {
       addMediaClip(id, type, src, 5, startAtTime, fileId);
     }
@@ -2681,47 +2739,108 @@ const renderHome = () => (
         </div>
       </div>
 
+      {/* SVG Liquid Gooey Filter Definition */}
+      <svg className="absolute w-0 h-0 pointer-events-none" style={{ position: "absolute", width: 0, height: 0 }}>
+        <defs>
+          <filter id="liquid-gooey" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo" />
+            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+          </filter>
+        </defs>
+      </svg>
+
       {/* Floating Action Menu for Home */}
       <div className="absolute bottom-10 left-0 right-0 flex justify-center items-center px-6 z-[60] pointer-events-none">
-        <div className="w-full max-w-[340px] flex gap-4 pointer-events-auto">
-          <AnimatePresence mode="popLayout">
-            {!isCreatingProject && (
-              <motion.div
-                key="new-project"
-                role="button"
-                layoutId="new-project-btn"
-                transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-                onClick={() => setIsCreatingProject(true)}
-                className="flex-1 cursor-pointer flex justify-center items-center gap-3 shadow-[0_8px_30px_rgb(0,0,0,0.5)] active:scale-[0.98] h-[64px] bg-transparent rounded-full text-white font-medium text-xl border-[2px] border-white backdrop-blur-md hover:bg-white/10 transition-colors"
-              >
-                <span className="pr-2">New Project</span>
-              </motion.div>
-            )}
-            {!isCreatingProject && (
-              <motion.div
-                key="settings-btn"
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.8 }}
-                onClick={() => setCurrentScreen("settings")}
-                className="cursor-pointer shrink-0 w-[64px] h-[64px] rounded-full border-[2px] border-white flex items-center justify-center bg-transparent backdrop-blur-md text-white shadow-[0_8px_30px_rgb(0,0,0,0.5)] active:scale-[0.98] hover:bg-white/10 transition-colors"
-              >
-                <Settings size={28} />
-              </motion.div>
-            )}
-            {isCreatingProject && (
-              <motion.div
-                key="create-project"
-                role="button"
-                layoutId="new-project-btn"
-                transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-                onClick={() => handleCreateProject(focusedRatio)}
-                className="cursor-pointer pointer-events-auto flex justify-center items-center gap-3 shadow-[0_8px_30px_rgb(0,0,0,0.5)] active:scale-[0.98] w-full h-[64px] bg-white rounded-full text-black font-bold text-xl"
-              >
-                <span>Create</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <div className="w-[340px] h-[64px] relative pointer-events-auto select-none">
+          
+          {/* Liquid Gooey Background Layer */}
+          <div className="absolute inset-0 pointer-events-none overflow-visible" style={{ filter: "url(#liquid-gooey)" }}>
+            {/* Main Pill BG blob */}
+            <motion.div
+              animate={{
+                width: isCreatingProject ? 340 : 260,
+                backgroundColor: isCreatingProject ? "#ffffff" : "#1e1e22",
+                borderColor: isCreatingProject ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.15)",
+              }}
+              transition={{ type: "spring", stiffness: 150, damping: 18, mass: 1 }}
+              className="absolute left-0 top-0 h-full rounded-full border-[2.5px] shadow-[0_8px_30px_rgba(0,0,0,0.6)]"
+            />
+
+            {/* Settings Circle BG blob */}
+            <motion.div
+              initial={{
+                left: 138,
+                scale: 0.1,
+                opacity: 0,
+                backgroundColor: "#1e1e22",
+              }}
+              animate={{
+                left: isCreatingProject ? 138 : 276,
+                scale: isCreatingProject ? 0.1 : 1,
+                opacity: isCreatingProject ? 0 : 1,
+                backgroundColor: isCreatingProject ? "#ffffff" : "#1e1e22",
+                borderColor: isCreatingProject ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.15)",
+              }}
+              transition={{ type: "spring", stiffness: 130, damping: 14, mass: 1 }}
+              className="absolute top-0 w-[64px] h-[64px] rounded-full border-[2.5px] shadow-[0_8px_30px_rgba(0,0,0,0.6)]"
+            />
+          </div>
+
+          {/* Interactive Foreground Label & Touch Targets (Pristine & Crisp - no blur) */}
+          <div className="absolute inset-0 z-10 flex items-center">
+            {/* Pill text container */}
+            <div 
+              className="absolute left-0 top-0 h-full flex items-center justify-center transition-all duration-300" 
+              style={{ width: isCreatingProject ? "340px" : "260px" }}
+            >
+              <AnimatePresence mode="wait">
+                {!isCreatingProject ? (
+                  <motion.button
+                    key="lbl-new-project"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    onClick={() => setIsCreatingProject(true)}
+                    className="w-full h-full text-white font-extrabold tracking-tight text-lg uppercase flex items-center justify-center cursor-pointer focus:outline-none hover:opacity-80 active:scale-[0.98] transition-transform duration-100"
+                  >
+                    New Project
+                  </motion.button>
+                ) : (
+                  <motion.button
+                    key="lbl-create-project"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.2 }}
+                    onClick={() => handleCreateProject(focusedRatio)}
+                    className="w-full h-full text-zinc-950 font-black tracking-tight text-xl uppercase flex items-center justify-center cursor-pointer focus:outline-none hover:opacity-80 active:scale-[0.98] transition-transform duration-100"
+                  >
+                    Create
+                  </motion.button>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Settings button container */}
+            <AnimatePresence>
+              {!isCreatingProject && (
+                <motion.button
+                  key="fg-settings-btn"
+                  initial={{ opacity: 0, scale: 0.5, rotate: -45 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  exit={{ opacity: 0, scale: 0.5, rotate: 45 }}
+                  transition={{ type: "spring", stiffness: 180, damping: 15 }}
+                  onClick={() => setCurrentScreen("settings")}
+                  className="absolute right-0 top-0 w-[64px] h-[64px] flex items-center justify-center text-zinc-400 hover:text-white cursor-pointer focus:outline-none group"
+                >
+                  <Settings size={28} className="transform group-hover:rotate-45 transition-transform duration-300" />
+                </motion.button>
+              )}
+            </AnimatePresence>
+          </div>
+
         </div>
       </div>
 
@@ -5273,6 +5392,38 @@ const renderEditor = () => (
                       </span>
                     </button>
                   </div>
+                  {selectedClipId && (() => {
+                    const c = clips.find(x => x.id === selectedClipId);
+                    if (!c || c.type !== "video") return null;
+                    return (
+                      <div className="mt-1.5 pt-1.5 border-t border-white/5 flex flex-col gap-1 px-0.5">
+                        <div className="flex justify-between items-center text-[7.5px] font-bold text-zinc-400 uppercase tracking-widest leading-none">
+                          <span>Source Video Meta</span>
+                          <span className="text-zinc-500 font-mono">Real-time OS</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1 text-center mt-1">
+                          <div className="bg-white/[0.02] border border-white/5 rounded py-0.5 px-1 flex flex-col justify-center">
+                            <div className="text-[7px] text-zinc-500 font-bold uppercase leading-none">Duration</div>
+                            <div className="text-[8.5px] text-white font-mono font-semibold mt-0.5 leading-none">
+                              {c.durationSeconds ? c.durationSeconds.toFixed(2) : "—"}s
+                            </div>
+                          </div>
+                          <div className="bg-white/[0.02] border border-white/5 rounded py-0.5 px-1 flex flex-col justify-center">
+                            <div className="text-[7px] text-zinc-500 font-bold uppercase leading-none">Res</div>
+                            <div className="text-[8.5px] text-white font-mono font-semibold mt-0.5 leading-none">
+                              {c.width && c.height ? `${c.width}×${c.height}` : "—"}
+                            </div>
+                          </div>
+                          <div className="bg-white/[0.02] border border-white/5 rounded py-0.5 px-1 flex flex-col justify-center">
+                            <div className="text-[7px] text-zinc-500 font-bold uppercase leading-none">Rate</div>
+                            <div className="text-[8.5px] text-white font-mono font-semibold mt-0.5 leading-none">
+                              {c.fps ? `${Math.round(c.fps)} FPS` : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </motion.div>
               )}
               {activeExpandedMenu === "speed-curves" && (

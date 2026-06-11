@@ -71,6 +71,9 @@ export type Clip = {
   volume?: number; // 0 to 100
   speed?: number; // playback speed modifier
   opticalFlow?: boolean; // smooth slow-motion
+  width?: number; // resolution width
+  height?: number; // resolution height
+  fps?: number; // frames per second
   
   // Transform Base
   translateX?: number;

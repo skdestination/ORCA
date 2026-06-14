@@ -65,6 +65,9 @@ import {
   Clipboard,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { Capacitor } from "@capacitor/core";
+import { Filesystem, Directory } from "@capacitor/filesystem";
+import { Media } from "@capacitor-community/media";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
 import { SpeedCurveEditor } from "./SpeedCurveEditor";
 import { TextEditorMenu } from "./TextEditorMenu";
@@ -433,6 +436,109 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [hasMicPermission, setHasMicPermission] = useState(false);
   const [voiceoverLayerId, setVoiceoverLayerId] = useState<string | null>(null);
+  const [liveMicLevels, setLiveMicLevels] = useState<number[]>(
+    [40, 70, 30, 80, 50, 100, 60, 40, 90, 50, 30, 70, 40, 80, 50, 60, 40, 90, 30]
+  );
+
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micLevelsAnimFrameRef = useRef<number | null>(null);
+  const recordingStartPlayheadTimeRef = useRef<number>(0);
+
+  // Start / Stop real mic analysis based on isRecording
+  useEffect(() => {
+    if (!isRecording) {
+      if (micLevelsAnimFrameRef.current) {
+        cancelAnimationFrame(micLevelsAnimFrameRef.current);
+        micLevelsAnimFrameRef.current = null;
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      return;
+    }
+
+    let active = true;
+    const startAnalyser = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        micStreamRef.current = stream;
+        setHasMicPermission(true);
+
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        audioContextRef.current = audioCtx;
+
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64; 
+        analyserRef.current = analyser;
+        source.connect(analyser);
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const updateLevels = () => {
+          if (!active || !analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
+
+          const newLevels = Array.from({ length: 19 }, (_, index) => {
+            const sampleIndex = Math.floor((index / 19) * bufferLength);
+            const rawValue = dataArray[sampleIndex] || 0;
+            const heightValue = 15 + (rawValue / 255) * 85;
+            return Math.min(100, Math.max(15, heightValue + (Math.sin(Date.now() / 80 + index) * 3)));
+          });
+
+          setLiveMicLevels(newLevels);
+          micLevelsAnimFrameRef.current = requestAnimationFrame(updateLevels);
+        };
+
+        updateLevels();
+      } catch (err) {
+        console.warn("Could not start real audio analyser, falling back to realistic simulation.", err);
+        
+        const updateSimulatedLevels = () => {
+          if (!active) return;
+          
+          const time = Date.now();
+          const speechEnvelope = Math.max(0.1, Math.sin(time / 800) * 0.4 + 0.6); 
+          const syllables = Math.max(0.2, Math.sin(time / 150) * 0.5 + 0.5);      
+          const voiceIntensity = speechEnvelope * syllables;
+
+          const newLevels = Array.from({ length: 19 }, (_, index) => {
+            const staticHeight = [40, 70, 30, 80, 50, 100, 60, 40, 90, 50, 30, 70, 40, 80, 50, 60, 40, 90, 30][index];
+            const speakerOffset = (Math.sin(time / 120 + index * 1.6) * 45 + 55) * voiceIntensity;
+            const liveHeight = 15 + speakerOffset * 0.85;
+            return Math.min(100, Math.max(15, liveHeight));
+          });
+          
+          setLiveMicLevels(newLevels);
+          micLevelsAnimFrameRef.current = requestAnimationFrame(updateSimulatedLevels);
+        };
+        
+        updateSimulatedLevels();
+      }
+    };
+
+    startAnalyser();
+
+    return () => {
+      active = false;
+      if (micLevelsAnimFrameRef.current) {
+        cancelAnimationFrame(micLevelsAnimFrameRef.current);
+      }
+    };
+  }, [isRecording]);
   const [projectMenuOpenId, setProjectMenuOpenId] = useState<string | null>(
     null,
   );
@@ -469,6 +575,21 @@ export default function App() {
   });
   
   const [appScale, setAppScale] = useState(1);
+  const [snappingEnabled, setSnappingEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("ai_studio_snapping_enabled");
+      return saved === null ? true : saved === "true";
+    } catch (e) {
+      return true;
+    }
+  });
+
+  const handleToggleSnapping = (enabled: boolean) => {
+    setSnappingEnabled(enabled);
+    try {
+      localStorage.setItem("ai_studio_snapping_enabled", enabled.toString());
+    } catch (e) {}
+  };
   useEffect(() => {
     try {
       const savedScale = localStorage.getItem("ai_studio_app_scale");
@@ -508,7 +629,34 @@ export default function App() {
   const [currentProjectRatio, setCurrentProjectRatio] =
     useState<string>("9:16");
   const [layers, setLayers] = useState<Layer[]>([]);
+  const layersRef = useRef<Layer[]>([]);
+  useEffect(() => {
+    layersRef.current = layers;
+  }, [layers]);
+
   const [clips, setClips] = useState<Clip[]>([]);
+  const clipsRef = useRef<Clip[]>([]);
+  useEffect(() => {
+    clipsRef.current = clips;
+  }, [clips]);
+
+  // Automatically clean up any layer that has no clips, unless it was manually created via the "Add Layer" (+) button, or is the active voiceover layer.
+  useEffect(() => {
+    setLayers((prevLayers) => {
+      if (prevLayers.length === 0) return prevLayers;
+      const activeLayerIds = new Set(clips.map((clip) => clip.layerId));
+      const filtered = prevLayers.filter((layer) => {
+        if (layer.isManuallyCreated) return true;
+        if (layer.id === voiceoverLayerId) return true;
+        return activeLayerIds.has(layer.id);
+      });
+      if (filtered.length === prevLayers.length) {
+        return prevLayers;
+      }
+      return filtered;
+    });
+  }, [clips, voiceoverLayerId]);
+
   const [currentTime, setCurrentTime] = useState(0);
   const currentTimeRef = useRef(0);
   useEffect(() => {
@@ -676,7 +824,7 @@ export default function App() {
         }
 
         // Check if clip's layer is locked
-        const clipLayer = layers.find((l) => l.id === c.layerId);
+        const clipLayer = layersRef.current.find((l) => l.id === c.layerId);
         let finalUpdates = { ...updates };
         if (clipLayer?.isLocked && !hasApplicableKeyframes) {
           // Block transform properties from being updated on base clip when locked
@@ -712,7 +860,7 @@ export default function App() {
         return updatedClip;
       })
     );
-  }, [layers]);
+  }, []);
   const isAtKeyframe = selectedClip?.keyframes?.some(k => {
     const isClose = Math.abs(currentTime - (selectedClip.leftSeconds + k.timeOffset)) < 0.05;
     if (!isClose) return false;
@@ -852,12 +1000,23 @@ export default function App() {
 
   // Real-time synchronization
   const isPlayingRef = useRef(isPlaying);
+  const isRecordingRef = useRef(isRecording);
   // Important: timeline zoom level affects pixels per second
   const pixelsPerSecond = BASE_PIXELS_PER_SECOND * zoomLevel;
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
+    if (isPlaying) {
+      lastTimeRef.current = undefined;
+    }
   }, [isPlaying]);
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+    if (isRecording) {
+      lastTimeRef.current = undefined;
+    }
+  }, [isRecording]);
 
   useEffect(() => {
     const playLoop = (time: number) => {
@@ -865,7 +1024,7 @@ export default function App() {
       const deltaTime = (time - lastTimeRef.current) / 1000;
       lastTimeRef.current = time;
 
-      if (isPlayingRef.current) {
+      if (isPlayingRef.current || isRecordingRef.current) {
         setCurrentTime((prev) => {
           const next = prev + deltaTime;
           if (timelineScrollRef.current) {
@@ -892,10 +1051,86 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState(0);
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
   const [exportedVideoBlob, setExportedVideoBlob] = useState<Blob | null>(null);
+  const [isSavingToGallery, setIsSavingToGallery] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const saveVideoToGallery = async () => {
+    if (!exportedVideoBlob) {
+      showToast("No exported video found.");
+      return;
+    }
+
+    try {
+      setIsSavingToGallery(true);
+      showToast("Saving to gallery...");
+
+      // 1. Convert blob to Base64
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(exportedVideoBlob);
+        reader.onloadend = () => {
+          const base64String = reader.result as string;
+          // Extract base64 raw string without context headers
+          const base = base64String.substring(base64String.indexOf(",") + 1);
+          resolve(base);
+        };
+        reader.onerror = (error) => reject(error);
+      });
+
+      // 2. Generate a unique filename
+      const filename = `project-${Date.now()}.mp4`;
+
+      // 3. Write file to Capacitor Cache Directory
+      const writeResult = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+
+      // 4. Check & Request Permissions
+      try {
+        const mediaAny = Media as any;
+        if (typeof mediaAny.checkPermissions === "function") {
+          const checkPerms = await mediaAny.checkPermissions();
+          if (checkPerms.photos !== "granted" && checkPerms.publicPhotoLibrary !== "granted") {
+            const reqPerms = await mediaAny.requestPermissions();
+            if (reqPerms.photos !== "granted" && reqPerms.publicPhotoLibrary !== "granted") {
+              showToast("Gallery storage permission denied.");
+              setIsSavingToGallery(false);
+              return;
+            }
+          }
+        }
+      } catch (permErr) {
+        console.warn("Permission API check/request failed:", permErr);
+      }
+
+      // 5. Save the video file to the Photos Gallery
+      await Media.saveVideo({
+        path: writeResult.uri,
+      });
+
+      // 6. Clean up temporary cache file
+      try {
+        await Filesystem.deleteFile({
+          path: filename,
+          directory: Directory.Cache,
+        });
+      } catch (cleanErr) {
+        console.warn("Could not clean up temp file:", cleanErr);
+      }
+
+      showToast("Successfully saved to Gallery!");
+    } catch (err: any) {
+      console.error("Gallery save failed:", err);
+      showToast(`Gallery save failed: ${err.message || err.toString()}`);
+    } finally {
+      setIsSavingToGallery(false);
+    }
   };
 
   const startExport = async () => {
@@ -1049,7 +1284,7 @@ export default function App() {
     if (voiceoverLayerId) {
       setLayers((prev) => {
         // Find if this layer has clips
-        const hasClips = clips.some((c) => c.layerId === voiceoverLayerId);
+        const hasClips = clipsRef.current.some((c) => c.layerId === voiceoverLayerId);
         if (!hasClips) {
           return prev.filter((l) => l.id !== voiceoverLayerId);
         }
@@ -1057,7 +1292,7 @@ export default function App() {
       });
       setVoiceoverLayerId(null);
     }
-  }, [voiceoverLayerId, clips]);
+  }, [voiceoverLayerId]);
 
   useEffect(() => {
     if (activeExpandedMenu === "voiceover" && !voiceoverLayerId) {
@@ -1083,7 +1318,10 @@ export default function App() {
       setIsRecording(false);
       setToastMessage("Recording saved to project timeline");
       
-      // Add a dummy voiceover clip
+      const calculatedDuration = currentTime - recordingStartPlayheadTimeRef.current;
+      const finalDuration = calculatedDuration > 0.2 ? calculatedDuration : 5.0;
+
+      // Add actual voiceover clip on the active voiceover layer
       if (voiceoverLayerId) {
         setClips((prev) => [
           ...prev,
@@ -1091,9 +1329,9 @@ export default function App() {
             id: `clip-voiceover-${Date.now()}`,
             layerId: voiceoverLayerId,
             type: "audio",
-            src: "", // No actual audio yet, just a representation
-            leftSeconds: currentTime,
-            durationSeconds: 5, // Default duration of 5 seconds for dummy
+            src: "", // Simulated/represented audio track
+            leftSeconds: recordingStartPlayheadTimeRef.current,
+            durationSeconds: finalDuration,
             trimStartSeconds: 0,
             volume: 100,
           },
@@ -1102,22 +1340,10 @@ export default function App() {
       return;
     }
 
-    if (!hasMicPermission) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // Release the microphone active track after obtaining permission
-        stream.getTracks().forEach(track => track.stop());
-        setHasMicPermission(true);
-        setIsRecording(true);
-        setToastMessage("Studio recording started...");
-      } catch (err) {
-        console.error("Microphone permission denied:", err);
-        setToastMessage("Microphone permission denied");
-      }
-    } else {
-      setIsRecording(true);
-      setToastMessage("Studio recording started...");
-    }
+    // Capture start time before starting recording
+    recordingStartPlayheadTimeRef.current = currentTime;
+    setIsRecording(true);
+    setToastMessage("Studio recording started...");
   };
 
   const handleBackToHome = () => {
@@ -2159,32 +2385,34 @@ export default function App() {
       let newLeftSeconds = initialLeftSeconds + deltaSeconds;
 
       // --- MAGNETIC SNAPPING (Only snap the clip being dragged) ---
-      const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
-      let minDistance = SNAP_THRESHOLD_SECONDS;
-      let snappedLeftSeconds = newLeftSeconds;
+      if (snappingEnabled) {
+        const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
+        let minDistance = SNAP_THRESHOLD_SECONDS;
+        let snappedLeftSeconds = newLeftSeconds;
 
-      const snapPoints = [0, currentTime];
-      clips.forEach((c) => {
-        if (!activeSelectedIds.includes(c.id)) {
-          snapPoints.push(c.leftSeconds);
-          snapPoints.push(c.leftSeconds + c.durationSeconds);
-        }
-      });
+        const snapPoints = [0, currentTime];
+        clips.forEach((c) => {
+          if (!activeSelectedIds.includes(c.id)) {
+            snapPoints.push(c.leftSeconds);
+            snapPoints.push(c.leftSeconds + c.durationSeconds);
+          }
+        });
 
-      snapPoints.forEach(sp => {
-         const distLeft = Math.abs(sp - newLeftSeconds);
-         if (distLeft < minDistance) {
-             minDistance = distLeft;
-             snappedLeftSeconds = sp;
-         }
-         const newRight = newLeftSeconds + clip.durationSeconds;
-         const distRight = Math.abs(sp - newRight);
-         if (distRight < minDistance) {
-             minDistance = distRight;
-             snappedLeftSeconds = sp - clip.durationSeconds;
-         }
-      });
-      newLeftSeconds = snappedLeftSeconds;
+        snapPoints.forEach(sp => {
+           const distLeft = Math.abs(sp - newLeftSeconds);
+           if (distLeft < minDistance) {
+               minDistance = distLeft;
+               snappedLeftSeconds = sp;
+           }
+           const newRight = newLeftSeconds + clip.durationSeconds;
+           const distRight = Math.abs(sp - newRight);
+           if (distRight < minDistance) {
+               minDistance = distRight;
+               snappedLeftSeconds = sp - clip.durationSeconds;
+           }
+        });
+        newLeftSeconds = snappedLeftSeconds;
+      }
       
       const finalDeltaSeconds = newLeftSeconds - initialLeftSeconds;
 
@@ -2316,13 +2544,10 @@ export default function App() {
       // If a layer was created but the clip didn't end up on it, delete the layer
       if (createdLayerId) {
         const idToCheck = createdLayerId;
-        setClips((prevClips) => {
-          const finalClip = prevClips.find(c => c.id === clip.id);
-          if (!finalClip || finalClip.layerId !== idToCheck) {
-            setLayers((prevLayers) => prevLayers.filter(l => l.id !== idToCheck));
-          }
-          return prevClips;
-        });
+        const finalClip = clipsRef.current.find(c => c.id === clip.id);
+        if (!finalClip || finalClip.layerId !== idToCheck) {
+          setLayers((prevLayers) => prevLayers.filter(l => l.id !== idToCheck));
+        }
       }
     };
 
@@ -2356,27 +2581,65 @@ export default function App() {
           const maxAvailableDuration = c.originalDurationSeconds !== undefined ? c.originalDurationSeconds : Number.MAX_VALUE;
 
           if (side === "left") {
+            if (c.type === "image" || c.type === "text") {
+              let newLeft = Math.max(0, initialLeftSeconds + deltaSeconds);
+              
+              if (snappingEnabled) {
+                const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
+                let minDistance = SNAP_THRESHOLD_SECONDS;
+                let snappedLeft = newLeft;
+                const snapPoints = [0, currentTime];
+                prev.forEach(other => {
+                  if (other.id !== clip.id) {
+                    snapPoints.push(other.leftSeconds);
+                    snapPoints.push(other.leftSeconds + other.durationSeconds);
+                  }
+                });
+                snapPoints.forEach(sp => {
+                  const dist = Math.abs(sp - newLeft);
+                  if (dist < minDistance) {
+                    minDistance = dist;
+                    snappedLeft = sp;
+                  }
+                });
+                newLeft = snappedLeft;
+              }
+
+              const change = newLeft - initialLeftSeconds;
+              const newDuration = Math.max(0.5, initialDurationSeconds - change);
+              if (newDuration < 0.5) return c; // Clamp
+              return {
+                ...c,
+                leftSeconds: newLeft,
+                durationSeconds: newDuration,
+                trimStartSeconds: 0,
+                opticalFlow: undefined,
+              };
+            }
+
             let newLeft = Math.max(0, initialLeftSeconds + deltaSeconds);
             
             // Snap left edge
-            const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
-            let minDistance = SNAP_THRESHOLD_SECONDS;
-            let snappedLeft = newLeft;
-            const snapPoints = [0, currentTime];
-            prev.forEach(other => {
-              if (other.id !== clip.id) {
-                snapPoints.push(other.leftSeconds);
-                snapPoints.push(other.leftSeconds + other.durationSeconds);
-              }
-            });
-            snapPoints.forEach(sp => {
-              const dist = Math.abs(sp - newLeft);
-              if (dist < minDistance) {
-                minDistance = dist;
-                snappedLeft = sp;
-              }
-            });
-            newLeft = snappedLeft;
+            if (snappingEnabled) {
+              const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
+              let minDistance = SNAP_THRESHOLD_SECONDS;
+              let snappedLeft = newLeft;
+              const snapPoints = [0, currentTime];
+              prev.forEach(other => {
+                if (other.id !== clip.id) {
+                  snapPoints.push(other.leftSeconds);
+                  snapPoints.push(other.leftSeconds + other.durationSeconds);
+                }
+              });
+              snapPoints.forEach(sp => {
+                const dist = Math.abs(sp - newLeft);
+                if (dist < minDistance) {
+                  minDistance = dist;
+                  snappedLeft = sp;
+                }
+              });
+              newLeft = snappedLeft;
+            }
 
             const change = newLeft - initialLeftSeconds;
             let newDuration = Math.max(0.5, initialDurationSeconds - change);
@@ -2398,6 +2661,37 @@ export default function App() {
               opticalFlow: undefined,
             };
           } else {
+            if (c.type === "image" || c.type === "text") {
+              let newDuration = Math.max(
+                0.5,
+                initialDurationSeconds + deltaSeconds,
+              );
+              
+              if (snappingEnabled) {
+                let newRight = initialLeftSeconds + newDuration;
+                const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
+                let minDistance = SNAP_THRESHOLD_SECONDS;
+                let snappedRight = newRight;
+                const snapPoints = [currentTime];
+                prev.forEach(other => {
+                  if (other.id !== clip.id) {
+                    snapPoints.push(other.leftSeconds);
+                    snapPoints.push(other.leftSeconds + other.durationSeconds);
+                  }
+                });
+                snapPoints.forEach(sp => {
+                  const dist = Math.abs(sp - newRight);
+                  if (dist < minDistance) {
+                    minDistance = dist;
+                    snappedRight = sp;
+                  }
+                });
+                newDuration = Math.max(0.5, snappedRight - initialLeftSeconds);
+              }
+
+              return { ...c, durationSeconds: newDuration, opticalFlow: undefined };
+            }
+
             let newDuration = Math.max(
               0.5,
               initialDurationSeconds + deltaSeconds,
@@ -2408,25 +2702,27 @@ export default function App() {
             }
             
             // Snap right edge
-            let newRight = initialLeftSeconds + newDuration;
-            const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
-            let minDistance = SNAP_THRESHOLD_SECONDS;
-            let snappedRight = newRight;
-            const snapPoints = [currentTime];
-            prev.forEach(other => {
-              if (other.id !== clip.id) {
-                snapPoints.push(other.leftSeconds);
-                snapPoints.push(other.leftSeconds + other.durationSeconds);
-              }
-            });
-            snapPoints.forEach(sp => {
-              const dist = Math.abs(sp - newRight);
-              if (dist < minDistance) {
-                minDistance = dist;
-                snappedRight = sp;
-              }
-            });
-            newDuration = Math.max(0.5, snappedRight - initialLeftSeconds);
+            if (snappingEnabled) {
+              let newRight = initialLeftSeconds + newDuration;
+              const SNAP_THRESHOLD_SECONDS = 15 / currentPixelsPerSecondRef.current;
+              let minDistance = SNAP_THRESHOLD_SECONDS;
+              let snappedRight = newRight;
+              const snapPoints = [currentTime];
+              prev.forEach(other => {
+                if (other.id !== clip.id) {
+                  snapPoints.push(other.leftSeconds);
+                  snapPoints.push(other.leftSeconds + other.durationSeconds);
+                }
+              });
+              snapPoints.forEach(sp => {
+                const dist = Math.abs(sp - newRight);
+                if (dist < minDistance) {
+                  minDistance = dist;
+                  snappedRight = sp;
+                }
+              });
+              newDuration = Math.max(0.5, snappedRight - initialLeftSeconds);
+            }
 
             if (newDuration + initialTrimStartSeconds > maxAvailableDuration) {
                 newDuration = maxAvailableDuration - initialTrimStartSeconds;
@@ -2581,6 +2877,27 @@ export default function App() {
                   className="mt-2 text-xs font-bold text-zinc-400 hover:text-white transition-colors bg-zinc-800/50 hover:bg-zinc-800 py-2 rounded-xl border border-white/5"
                 >
                   Reset Default
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900 border border-white/5 rounded-3xl p-6">
+              <h3 className="text-white font-bold mb-4 text-xl">
+                Timeline Snapping
+              </h3>
+              <p className="text-sm text-zinc-400 mb-6 font-medium">
+                Toggle interactive grid alignment and edge snapping for layers and timeline playhead.
+              </p>
+              <div className="flex items-center justify-between bg-zinc-800/50 rounded-xl px-4 py-3 border border-white/5">
+                <span className="text-zinc-200 font-medium text-sm">Enable Snapping</span>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSnapping(!snappingEnabled)}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-200 outline-none ${snappingEnabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                >
+                  <div
+                    className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-200 ${snappingEnabled ? 'translate-x-[24px]' : 'translate-x-[0px]'}`}
+                  />
                 </button>
               </div>
             </div>
@@ -3035,38 +3352,73 @@ const renderEditor = () => (
               />
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={() => {
-                  const a = document.createElement("a");
-                  a.href = exportedVideoUrl;
-                  a.download = `project-${exportResolution}-${Date.now()}.webm`;
-                  a.click();
-                  showToast("Video downloaded.");
-                }}
-                className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors"
-              >
-                <Download size={18} />
-                Save to Device
-              </button>
-              {navigator.share && (
-                <button
-                  onClick={async () => {
-                    try {
-                      if (!exportedVideoBlob) return;
-                      const file = new File([exportedVideoBlob], `project-${Date.now()}.webm`, { type: 'video/webm' });
-                      await navigator.share({
-                        files: [file],
-                        title: 'My Video Project',
-                      });
-                    } catch (err) {
-                      console.warn("Share failed", err);
-                    }
-                  }}
-                  className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors"
-                >
-                  <Share size={18} />
-                  Share / Save to Gallery
-                </button>
+              {Capacitor.isNativePlatform() ? (
+                <>
+                  <button
+                    onClick={saveVideoToGallery}
+                    disabled={isSavingToGallery}
+                    className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors disabled:opacity-50"
+                  >
+                    <Download size={18} />
+                    {isSavingToGallery ? "Saving to Gallery..." : "Save to Gallery"}
+                  </button>
+                  {navigator.share && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!exportedVideoBlob) return;
+                          const file = new File([exportedVideoBlob], `project-${Date.now()}.mp4`, { type: 'video/mp4' });
+                          await navigator.share({
+                            files: [file],
+                            title: 'My Video Project',
+                          });
+                        } catch (err) {
+                          console.warn("Share failed", err);
+                        }
+                      }}
+                      className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors"
+                    >
+                      <Share size={18} />
+                      Share Video
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = exportedVideoUrl;
+                      a.download = `project-${exportResolution}-${Date.now()}.webm`;
+                      a.click();
+                      showToast("Video downloaded.");
+                    }}
+                    className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors"
+                  >
+                    <Download size={18} />
+                    Save to Device
+                  </button>
+                  {navigator.share && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!exportedVideoBlob) return;
+                          const file = new File([exportedVideoBlob], `project-${Date.now()}.webm`, { type: 'video/webm' });
+                          await navigator.share({
+                            files: [file],
+                            title: 'My Video Project',
+                          });
+                        } catch (err) {
+                          console.warn("Share failed", err);
+                        }
+                      }}
+                      className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors"
+                    >
+                      <Share size={18} />
+                      Share / Save to Gallery
+                    </button>
+                  )}
+                </>
               )}
               <button
                 onClick={() => {
@@ -3084,29 +3436,6 @@ const renderEditor = () => (
 
       {/* Top Header */}
       <header className="flex justify-between items-center px-4 py-4 shrink-0 relative z-[100] pointer-events-none">
-        {/* Pill Popup */}
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
-          <AnimatePresence>
-            {pillPopup && (
-              <motion.div
-                initial={{ opacity: 0, y: -20, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -20, scale: 0.95 }}
-                className="bg-zinc-900 border border-white/10 rounded-full px-4 py-2 flex items-center gap-3 shadow-2xl"
-              >
-                {pillPopup.type === 'loading' && pillPopup.progress !== undefined && (
-                  <div className="w-5 h-5 relative">
-                    <svg className="w-5 h-5" viewBox="0 0 20 20">
-                      <circle cx="10" cy="10" r="9" className="stroke-zinc-700" strokeWidth="2" fill="none" />
-                      <circle cx="10" cy="10" r="9" className="stroke-blue-500" strokeWidth="2" fill="none" strokeDasharray={`${pillPopup.progress * 2 * Math.PI * 9 / 100} 1000`} transform="rotate(-90 10 10)" />
-                    </svg>
-                  </div>
-                )}
-                <span className="text-[12px] font-medium text-white">{pillPopup.message}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
         
         <div className="flex items-center bg-zinc-800 rounded-full px-1 py-1 shadow-lg border border-white/5 pointer-events-auto">
           <button
@@ -3752,7 +4081,7 @@ const renderEditor = () => (
 
         {/* Playback Transport Controls */}
         <div 
-          className="flex justify-between items-center shrink-0 w-full"
+          className="flex justify-between items-center shrink-0 w-full relative"
           style={{
             paddingRight: "7px",
             paddingLeft: "5px",
@@ -3800,22 +4129,21 @@ const renderEditor = () => (
                 animate={{ opacity: 1, scale: 1, x: 0 }}
                 exit={{ opacity: 0, scale: 0.9, x: -10 }}
                 transition={{ duration: 0.2 }}
-                className="flex items-center bg-[#1c1c1f] border border-white/10 rounded-full py-0.5 sm:py-1 px-1 sm:px-1.5 gap-0.5 sm:gap-1 shadow-md shrink-0 h-7 sm:h-8 mr-1 select-none"
+                className="flex items-center bg-[#1c1c1f] border border-white/10 rounded-full py-0.5 px-1 gap-1 shadow-md shrink-0 h-7 sm:h-8 mr-1 select-none"
               >
                 {/* Divider 1 */}
                 <div className="w-px h-3 sm:h-4 bg-zinc-700/60 mx-1 shrink-0" />
 
                 {/* 1. Comp Button */}
                 <button
-                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all outline-none select-none shrink-0"
                   onClick={() => {
                     setToastMessage("Comp: Composite action triggered");
                     setTimeout(() => setToastMessage(null), 2000);
                   }}
                   title="Comp Action"
                 >
-                  <Layers size={11} className="text-indigo-400 sm:w-3 sm:h-3" />
-                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Comp</span>
+                  <Layers className="text-indigo-400 w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
 
                 {/* Divider 2 */}
@@ -3823,15 +4151,14 @@ const renderEditor = () => (
 
                 {/* 2. Link Button */}
                 <button
-                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all outline-none select-none shrink-0"
                   onClick={() => {
                     setToastMessage("Link of selected clips triggered");
                     setTimeout(() => setToastMessage(null), 2000);
                   }}
                   title="Link Action"
                 >
-                  <Link2 size={11} className="text-emerald-400 sm:w-3 sm:h-3" />
-                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Link</span>
+                  <Link2 className="text-emerald-400 w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
 
                 {/* Divider 3 */}
@@ -3839,7 +4166,7 @@ const renderEditor = () => (
 
                 {/* 3. Paste Button */}
                 <button
-                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all outline-none select-none shrink-0"
                   onClick={() => {
                     if (copiedClip) {
                       handlePaste();
@@ -3850,8 +4177,7 @@ const renderEditor = () => (
                   }}
                   title="Paste Action"
                 >
-                  <Clipboard size={11} className="text-amber-400 sm:w-3 sm:h-3" />
-                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight">Paste</span>
+                  <Clipboard className="text-amber-400 w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
 
                 {/* Divider 4 */}
@@ -3859,15 +4185,14 @@ const renderEditor = () => (
 
                 {/* 4. Action Button (Decide Later) */}
                 <button
-                  className="flex items-center justify-center px-1.5 sm:px-2 py-0.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors gap-1 outline-none select-none"
+                  className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all outline-none select-none shrink-0"
                   onClick={() => {
                     setToastMessage("Placeholder action - customize later");
                     setTimeout(() => setToastMessage(null), 2000);
                   }}
                   title="Custom Action"
                 >
-                  <SlidersHorizontal size={11} className="text-pink-400 sm:w-3 sm:h-3" />
-                  <span className="text-[9.5px] sm:text-[10px] font-bold tracking-tight text-zinc-300">Action</span>
+                  <SlidersHorizontal className="text-pink-400 w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
               </motion.div>
             )}
@@ -3962,6 +4287,49 @@ const renderEditor = () => (
               </button>
             </div>
           </div>
+
+          {/* Integrated Multi-State Information Popups in same Pill shape design */}
+          <div className="absolute left-[110px] sm:left-[145px] lg:left-[165px] right-[215px] sm:right-[315px] lg:right-[355px] bottom-0 top-[29px] flex items-center justify-center pointer-events-none z-50">
+            <AnimatePresence>
+              {(pillPopup || toastMessage) && (() => {
+                const message = pillPopup ? pillPopup.message : toastMessage;
+                const len = message ? message.length : 0;
+                let fontSizeStyle = "text-[11px] sm:text-[12px]";
+                if (len > 35) {
+                  fontSizeStyle = "text-[8px] sm:text-[9.5px]";
+                } else if (len > 25) {
+                  fontSizeStyle = "text-[9px] sm:text-[10.5px]";
+                } else if (len > 15) {
+                  fontSizeStyle = "text-[10px] sm:text-[11px]";
+                }
+
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 5 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 5 }}
+                    transition={{ duration: 0.15 }}
+                    className="pointer-events-auto shrink-0 select-none"
+                  >
+                    <div className="bg-[#2A2A2D]/95 backdrop-blur-md rounded-full border border-white/10 shadow-lg px-2 sm:px-3 h-7 sm:h-8 flex items-center justify-center gap-1.5 w-[140px] sm:w-[200px] select-none text-center">
+                      {pillPopup && pillPopup.type === 'loading' && pillPopup.progress !== undefined && (
+                        <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 relative shrink-0">
+                          <svg className="w-full h-full" viewBox="0 0 20 20">
+                            <circle cx="10" cy="10" r="9" className="stroke-zinc-700/60" strokeWidth="2.5" fill="none" />
+                            <circle cx="10" cy="10" r="9" className="stroke-indigo-400" strokeWidth="2.5" fill="none" strokeDasharray={`${pillPopup.progress * 2 * Math.PI * 9 / 100} 1000`} transform="rotate(-90 10 10)" />
+                          </svg>
+                        </div>
+                      )}
+                      <span className={`font-semibold tracking-tight text-white/95 truncate w-full ${fontSizeStyle}`}>
+                        {message}
+                      </span>
+                    </div>
+                  </motion.div>
+                );
+              })()}
+            </AnimatePresence>
+          </div>
+
         </div>
       </main>
 
@@ -4171,6 +4539,7 @@ const renderEditor = () => (
                           order: maxOrder + 1,
                           isMuted: false,
                           isHidden: false,
+                          isManuallyCreated: true,
                         },
                       ];
                     });
@@ -4222,14 +4591,35 @@ const renderEditor = () => (
                       const rx = clientX - 100;
                       const rect = target.getBoundingClientRect();
                       const x = rx + timelineScrollRef.current!.scrollLeft;
-                      const newTime = Math.max(
+                      let newTime = Math.max(
                         0,
                         x / currentPixelsPerSecondRef.current,
                       );
+
+                      if (snappingEnabled) {
+                        const SNAP_THRESHOLD_SECONDS = 12 / currentPixelsPerSecondRef.current;
+                        let minDistance = SNAP_THRESHOLD_SECONDS;
+                        let snappedTime = newTime;
+                        const snapPoints = [0];
+                        clips.forEach((c) => {
+                          snapPoints.push(c.leftSeconds);
+                          snapPoints.push(c.leftSeconds + c.durationSeconds);
+                        });
+                        snapPoints.forEach((sp) => {
+                          const dist = Math.abs(sp - newTime);
+                          if (dist < minDistance) {
+                            minDistance = dist;
+                            snappedTime = sp;
+                          }
+                        });
+                        newTime = snappedTime;
+                      }
+
                       setCurrentTime(newTime);
 
-                      setPlayheadX(Math.max(0, rx));
-                      playheadXRef.current = Math.max(0, rx);
+                      const finalRx = newTime * currentPixelsPerSecondRef.current - timelineScrollRef.current!.scrollLeft;
+                      setPlayheadX(Math.max(0, finalRx));
+                      playheadXRef.current = Math.max(0, finalRx);
                     };
                     updateSeek(e.clientX);
 
@@ -4525,7 +4915,7 @@ const renderEditor = () => (
                                 onPointerDown={(e) =>
                                   handleClipDragStart(e, clip)
                                 }
-                                className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-all duration-300
+                                className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-[opacity,border-color,background-color] duration-150
                                            ${clip.type === "audio" ? "rounded-2xl bg-[#2b0e45]/95 border-purple-500/25" : "rounded-lg"}
                                            ${clip.type === "video" ? "bg-gradient-to-r from-blue-900/80 to-indigo-900/60 border-white/10" : ""}
                                            ${clip.type === "text" ? "bg-gradient-to-r from-amber-900/80 to-orange-900/60 border-white/10" : ""}
@@ -4537,6 +4927,7 @@ const renderEditor = () => (
                                   left: clip.leftSeconds * pixelsPerSecond,
                                   width: Math.max(2, clip.durationSeconds * pixelsPerSecond),
                                   touchAction: "none",
+                                  willChange: "left, width",
                                 }}
                               >
                                 {/* Keyframes Overlay */}
@@ -4989,7 +5380,7 @@ const renderEditor = () => (
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[220px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[220px]" : "rounded-[24px] h-[50px] justify-center w-[220px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "transition" && transitionModal && (() => {
@@ -5555,7 +5946,8 @@ const renderEditor = () => (
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: 10 }}
                   transition={{ duration: 0.2 }}
-                  className="flex flex-col w-full h-auto max-h-[240px] shrink-0 overflow-y-auto scrollbar-hide pt-0.5 pb-2"
+                  className="flex flex-col h-auto max-h-[240px] shrink-0 overflow-y-auto scrollbar-hide pb-2"
+                  style={{ width: "218px", paddingTop: "0px", paddingLeft: "0px" }}
                 >
                   <div className="flex justify-between items-center w-full px-2.5 mb-1 shrink-0">
                     <span className="text-[9.5px] font-bold text-white/90 uppercase tracking-widest flex items-center gap-1">
@@ -6308,9 +6700,15 @@ const renderEditor = () => (
                         {isRecording ? "Recording..." : "Tap To Record"}
                       </span>
                       <div className="flex items-end gap-[2px] h-3">
-                          {[40, 70, 30, 80, 50, 100, 60, 40, 90, 50, 30, 70, 40, 80, 50, 60, 40, 90, 30].map((h, i) => (
-                             <div key={i} className="flex-1 bg-white/20 rounded-full" style={{ height: `${h}%`, minHeight: '2px' }} />
-                          ))}
+                          {liveMicLevels.map((amplitude, i) => {
+                            return (
+                              <div
+                                key={i}
+                                className={`flex-1 rounded-full transition-all duration-150 ${isRecording ? 'bg-red-500' : 'bg-white/20'}`}
+                                style={{ height: `${Math.min(100, Math.max(15, amplitude))}%`, minHeight: '2px' }}
+                              />
+                            );
+                          })}
                       </div>
                     </div>
 
@@ -6669,20 +7067,21 @@ const renderEditor = () => (
             <motion.div
               layout
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-              className="flex items-center gap-1 w-full px-2 justify-center"
+              className="flex items-center gap-1 px-1.5 justify-center"
+              style={{ width: "218px" }}
             >
               <motion.button
                 layout
-                className="p-1.5 shrink-0 hover:bg-zinc-700 rounded-full text-zinc-300 transition-colors"
+                className="p-1 shrink-0 hover:bg-zinc-700 rounded-full text-zinc-300 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <PlusIcon size={16} />
+                <PlusIcon size={14} />
               </motion.button>
               <motion.div
                 layout
-                className="w-px h-6 bg-zinc-700 mx-1 shrink-0"
+                className="w-px h-4 bg-zinc-700 mx-1 shrink-0"
               ></motion.div>
-              <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[156px] overflow-hidden shrink-0 snap-x snap-mandatory">
+              <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[164px] overflow-hidden shrink-0 snap-x snap-mandatory">
                 {flowBarOrder.filter((key) => {
                   if (selectedClip?.type === "image" && ["volume", "speed", "stabilize"].includes(key)) {
                     return false;
@@ -6693,25 +7092,25 @@ const renderEditor = () => (
                 }).map((key) => {
                   switch(key) {
                     case 'voiceover': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${activeExpandedMenu === "voiceover" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white"}`} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "voiceover" ? null : "voiceover")}><Mic size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${activeExpandedMenu === "voiceover" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white"}`} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "voiceover" ? null : "voiceover")}><Mic size={14} /></motion.button>
                     );
                     case 'volume': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "volume" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "volume" ? null : "volume")}><Volume2 size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "volume" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "volume" ? null : "volume")}><Volume2 size={14} /></motion.button>
                     );
                     case 'text': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find((c) => c.id === selectedClipId)?.type === "text" ? (activeExpandedMenu === "text" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "hover:bg-zinc-700 text-white"}`} onClick={() => { const sel = clips.find((c) => c.id === selectedClipId); if (sel && sel.type === "text") { setActiveExpandedMenu(activeExpandedMenu === "text" ? null : "text"); } else { handleAddText(); } }}><Type size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find((c) => c.id === selectedClipId)?.type === "text" ? (activeExpandedMenu === "text" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "hover:bg-zinc-700 text-white"}`} onClick={() => { const sel = clips.find((c) => c.id === selectedClipId); if (sel && sel.type === "text") { setActiveExpandedMenu(activeExpandedMenu === "text" ? null : "text"); } else { handleAddText(); } }}><Type size={14} /></motion.button>
                     );
                     case 'crop': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && ["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "") ? (activeExpandedMenu === "crop" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || !["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "")} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "crop" ? null : "crop")}><Crop size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && ["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "") ? (activeExpandedMenu === "crop" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || !["video", "image"].includes(clips.find((c) => c.id === selectedClipId)?.type || "")} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "crop" ? null : "crop")}><Crop size={14} /></motion.button>
                     );
                     case 'adjust': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "adjust" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "adjust" ? null : "adjust")}><SlidersHorizontal size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "adjust" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "adjust" ? null : "adjust")}><SlidersHorizontal size={14} /></motion.button>
                     );
                     case 'speed': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "speed" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "speed" ? null : "speed")}><Clock size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "speed" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "speed" ? null : "speed")}><Clock size={14} /></motion.button>
                     );
                     case 'stabilize': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? (activeExpandedMenu === "stabilize" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "stabilize" ? null : "stabilize")}><Activity size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? (activeExpandedMenu === "stabilize" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "stabilize" ? null : "stabilize")}><Activity size={14} /></motion.button>
                     );
                     case 'copy': {
                       const isOptionActive = multiSelectActive;
@@ -6719,7 +7118,7 @@ const renderEditor = () => (
                         <motion.button
                           key={key}
                           layout
-                          className={`p-1.5 shrink-0 rounded-full transition-all duration-300 snap-start flex items-center justify-center relative touch-none ${
+                          className={`p-1 shrink-0 rounded-full transition-all duration-300 snap-start flex items-center justify-center relative touch-none ${
                             isOptionActive 
                               ? "bg-indigo-600/30 text-indigo-300 border border-indigo-500/50 shadow-[0_0_12px_rgba(99,102,241,0.5)]" 
                               : (selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-45 text-zinc-400 hover:text-white")
@@ -6730,7 +7129,7 @@ const renderEditor = () => (
                           style={{ touchAction: "none" }}
                           title="Press & Hold to toggle Multi-Select"
                         >
-                          <Copy size={16} />
+                          <Copy size={14} />
                           {isOptionActive && (
                             <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
                               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
@@ -6741,19 +7140,19 @@ const renderEditor = () => (
                       );
                     }
                     case 'extract-audio': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={handleExtractAudio}><Music size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "video" ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId || clips.find(c => c.id === selectedClipId)?.type !== "video"} onClick={handleExtractAudio}><Music size={14} /></motion.button>
                     );
                     case 'move': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "move" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "move" ? null : "move")}><Move size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "move" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "move" ? null : "move")}><Move size={14} /></motion.button>
                     );
                     case 'magic': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId} onClick={handleSmoothSlowMo}><Wand2 size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? "hover:bg-zinc-700 text-white" : "opacity-30"}`} disabled={!selectedClipId} onClick={handleSmoothSlowMo}><Wand2 size={14} /></motion.button>
                     );
                     case 'activity': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "blend" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "blend" ? null : "blend")}><Blend size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "blend" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "blend" ? null : "blend")}><Blend size={14} /></motion.button>
                     );
                     case 'mask': return (
-                      <motion.button key={key} layout className={`p-1.5 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "mask" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "mask" ? null : "mask")}><SquareDashed size={16} /></motion.button>
+                      <motion.button key={key} layout className={`p-1 shrink-0 rounded-full transition-colors snap-start flex items-center justify-center ${selectedClipId ? (activeExpandedMenu === "mask" ? "bg-zinc-700 text-white" : "hover:bg-zinc-700 text-white") : "opacity-30"}`} disabled={!selectedClipId} onClick={() => setActiveExpandedMenu(activeExpandedMenu === "mask" ? null : "mask")}><SquareDashed size={14} /></motion.button>
                     );
                     default: return null;
                   }
@@ -6776,22 +7175,6 @@ const renderEditor = () => (
 
 
 
-      {/* Pill Toast Notification */}
-      <AnimatePresence>
-        {toastMessage && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] pointer-events-none"
-          >
-            <div className="bg-[#2A2A2D]/90 backdrop-blur-md px-4 py-2.5 rounded-full border border-white/10 shadow-lg flex items-center gap-2">
-              <span className="text-[13px] font-medium text-white/90">{toastMessage}</span>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

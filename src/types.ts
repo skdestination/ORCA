@@ -7,6 +7,7 @@ export type Layer = {
   isHidden: boolean;
   isLocked?: boolean;
   name?: string;
+  isManuallyCreated?: boolean;
 };
 
 export type Keyframe = {

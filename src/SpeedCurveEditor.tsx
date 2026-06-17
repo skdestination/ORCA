@@ -26,15 +26,33 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
   const [playhead, setPlayhead] = useState(0);
 
   // SVG dimensions
-  const [dimensions, setDimensions] = useState({ width: 300, height: 160 });
+  const [dimensions, setDimensions] = useState({ width: 194, height: 110 });
 
   useEffect(() => {
-    if (containerRef.current) {
-      setDimensions({
-        width: containerRef.current.clientWidth,
-        height: containerRef.current.clientHeight
-      });
-    }
+    if (!containerRef.current) return;
+    
+    // Initial size estimation
+    setDimensions({
+      width: containerRef.current.clientWidth || 194,
+      height: containerRef.current.clientHeight || 110,
+    });
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect) {
+          // Math.floor to avoid subpixel drawing issues
+          setDimensions({
+            width: Math.floor(entry.contentRect.width),
+            height: Math.floor(entry.contentRect.height),
+          });
+        }
+      }
+    });
+
+    observer.observe(containerRef.current);
+    return () => {
+      observer.disconnect();
+    };
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent, id: string) => {
@@ -106,25 +124,27 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
   return (
     <div className="flex flex-col w-full bg-[#1a1a1c] rounded-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5">
-        <div className="flex items-center gap-2 text-[#a1a1aa] text-[9.5px] font-medium font-sans">
-          Duration: <span className="text-[#a1a1aa]">6.3s</span> <span className="text-[#e2db81]">→</span> <span className="text-[#e2db81]">6.3s</span>
+      <div className="flex items-center justify-between px-2 py-1.5 border-b border-white/[0.03]">
+        <div className="flex items-center gap-1 text-[#a1a1aa] text-[9px] font-bold font-sans uppercase tracking-tight">
+          <span className="text-zinc-500">Speed:</span> <span className="text-[#e2db81]">6.3s → 6.3s</span>
         </div>
         
-        <div className="flex items-center gap-1.5">
-          <button className="text-white opacity-80 hover:opacity-100">
-            <Play size={14} />
+        <div className="flex items-center gap-1">
+          <button className="text-zinc-400 hover:text-white p-1 hover:bg-white/5 rounded transition-colors" title="Play animation">
+            <Play size={11} />
           </button>
           
           <button 
             onClick={handleDeleteBeat}
-            className="flex items-center gap-1 bg-[#2a2a2c] hover:bg-[#323235] text-[#a1a1aa] hover:text-white px-1.5 py-0.5 rounded-[4px] text-[9.5px] font-medium transition-colors"
+            disabled={!(points.findIndex(p => p.id === selectedPointId) > 0 && points.findIndex(p => p.id === selectedPointId) < points.length - 1)}
+            className="flex items-center justify-center p-1 bg-[#2a2a2c]/60 hover:bg-red-500/15 text-zinc-400 hover:text-red-400 disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-zinc-400 rounded transition-colors"
+            title="Delete selected beat point"
           >
-            <Minus size={9} /> Delete beat
+            <Minus size={11} />
           </button>
 
-          <button onClick={onClose} className="text-white hover:text-green-400 p-0.5 opacity-80 hover:opacity-100 ml-0.5">
-            <Check size={14} />
+          <button onClick={onClose} className="p-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/10 rounded transition-all">
+            <Check size={11} strokeWidth={2.5} />
           </button>
         </div>
       </div>

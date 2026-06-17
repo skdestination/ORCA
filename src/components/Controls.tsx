@@ -35,6 +35,7 @@ export function CompactRulerControl({
   labelStyle,
   headerStyle,
   hideTicks = false,
+  size = "normal",
 }: {
   value: number;
   min: number;
@@ -51,11 +52,14 @@ export function CompactRulerControl({
   labelStyle?: React.CSSProperties;
   headerStyle?: React.CSSProperties;
   hideTicks?: boolean;
+  size?: "small" | "normal";
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startValue = useRef(0);
+
+  const isSmall = size === "small";
 
   // Dynamic Intervals Logic based on Range
   const range = max - min;
@@ -86,7 +90,7 @@ export function CompactRulerControl({
   }
 
   // Configuration for spacing
-  const MAJOR_TICK_SPACING = 60; // Pixels between major ticks
+  const MAJOR_TICK_SPACING = size === "small" ? 36 : 60; // Pixels between major ticks
   const pixelsPerUnit = MAJOR_TICK_SPACING / majorInterval;
 
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -155,18 +159,18 @@ export function CompactRulerControl({
   if (hideTicks) {
     const percentage = ((value - min) / (max - min)) * 100;
     return (
-      <div className="flex flex-col w-full select-none mt-0.5 pb-1 font-sans" style={style}>
+      <div className={`flex flex-col w-full select-none ${size === "small" ? "mt-0 pb-0.5" : "mt-0.5 pb-1"} font-sans`} style={style}>
         <div className="flex justify-between items-center mb-1 pl-0.5 pr-0.5" style={headerStyle}>
-          <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider" style={labelStyle}>
+          <span className={size === "small" ? "text-[8.5px] font-bold text-zinc-400 uppercase tracking-wider" : "text-[10px] font-bold text-zinc-400 uppercase tracking-wider"} style={labelStyle}>
             {label}
           </span>
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-indigo-400 font-mono font-bold w-12 text-align-right text-right bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/10">
+            <span className={size === "small" ? "text-[8px] text-indigo-400 font-mono font-bold w-10 text-align-right text-right bg-indigo-500/10 px-1 py-0.5 rounded border border-indigo-500/10 leading-none" : "text-[10px] text-indigo-400 font-mono font-bold w-12 text-align-right text-right bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/10"}>
               {displayVal}
               {unit}
             </span>
             <button
-              className="text-[8.5px] w-4.5 h-4.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold"
+              className={size === "small" ? "text-[7.5px] w-3.5 h-3.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold" : "text-[8.5px] w-4.5 h-4.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold"}
               onClick={onReset}
               title={`Reset ${label}`}
             >
@@ -185,7 +189,7 @@ export function CompactRulerControl({
             )}
           </div>
         </div>
-        <div className="h-[24px] relative flex items-center px-1">
+        <div className={size === "small" ? "h-[14px] relative flex items-center px-1" : "h-[24px] relative flex items-center px-1"}>
           <input
             type="range"
             min={min}
@@ -204,18 +208,18 @@ export function CompactRulerControl({
   }
 
   return (
-    <div className="flex flex-col w-full select-none mt-0.5 pb-1.5 font-sans" style={style}>
+    <div className={`flex flex-col w-full select-none ${size === "small" ? "mt-0 pb-0.5" : "mt-0.5 pb-1.5"} font-sans`} style={style}>
       <div className="flex justify-between items-center mb-1 pl-0.5 pr-0.5" style={headerStyle}>
-        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider" style={labelStyle}>
+        <span className={size === "small" ? "text-[8.5px] font-bold text-zinc-400 uppercase tracking-wider" : "text-[10px] font-bold text-zinc-400 uppercase tracking-wider"} style={labelStyle}>
           {label}
         </span>
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-indigo-400 font-mono font-bold w-12 text-align-right text-right bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/10">
+          <span className={size === "small" ? "text-[8px] text-indigo-400 font-mono font-bold w-10 text-align-right text-right bg-indigo-500/10 px-1 py-0.5 rounded border border-indigo-500/10 leading-none" : "text-[10px] text-indigo-400 font-mono font-bold w-12 text-align-right text-right bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/10"}>
             {displayVal}
             {unit}
           </span>
           <button
-            className="text-[8.5px] w-4.5 h-4.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold"
+            className={size === "small" ? "text-[7.5px] w-3.5 h-3.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold" : "text-[8.5px] w-4.5 h-4.5 flex items-center justify-center bg-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all font-bold"}
             onClick={onReset}
             title={`Reset ${label}`}
           >
@@ -237,7 +241,7 @@ export function CompactRulerControl({
 
       <div
         ref={containerRef}
-        className="h-[42px] mx-0 relative overflow-hidden cursor-ew-resize touch-none bg-zinc-950/20 rounded-xl border border-white/5 shadow-inner"
+        className={size === "small" ? "h-[22px] mx-0 relative overflow-hidden cursor-ew-resize touch-none bg-zinc-950/20 rounded-lg border border-white/5 shadow-inner" : "h-[42px] mx-0 relative overflow-hidden cursor-ew-resize touch-none bg-zinc-950/20 rounded-xl border border-white/5 shadow-inner"}
         style={rulerStyle}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -262,15 +266,15 @@ export function CompactRulerControl({
                 }}
               >
                 <div
-                  className={`w-[2px] rounded-full transition-all duration-150 ${
+                  className={`w-[1.5px] rounded-full transition-all duration-150 ${
                     isCurrent
-                      ? "h-[20px] bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.6)]"
+                      ? (isSmall ? "h-[14px] bg-indigo-400" : "h-[20px] bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.6)]")
                       : isMajor
-                      ? "h-[12px] bg-white/60"
-                      : "h-[6px] bg-white/20"
+                      ? (isSmall ? "h-[8px] bg-white/50" : "h-[12px] bg-white/60")
+                      : (isSmall ? "h-[4px] bg-white/20" : "h-[6px] bg-white/20")
                   }`}
                 />
-                {isMajor && (
+                {isMajor && !isSmall && (
                   <span
                     className={`absolute bottom-1 text-[8px] translate-y-[8px] tracking-tight ${
                       isCurrent ? "text-indigo-400 font-bold" : "text-zinc-500 font-medium"
@@ -283,7 +287,7 @@ export function CompactRulerControl({
             );
           })}
         </div>
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[11px] w-[2px] h-[22px] bg-indigo-500 rounded-full pointer-events-none shadow-[0_0_6px_rgba(99,102,241,0.8)] z-10" />
+        <div className={size === "small" ? "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-[14px] bg-indigo-500 rounded-full pointer-events-none z-10" : "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[11px] w-[2px] h-[22px] bg-indigo-500 rounded-full pointer-events-none shadow-[0_0_6px_rgba(99,102,241,0.8)] z-10"} />
       </div>
     </div>
   );
@@ -320,11 +324,13 @@ export function SpeedRulerControl({
   onChange,
   onReset,
   onClose,
+  children,
 }: {
   value: number;
   onChange: (val: number) => void;
   onReset: () => void;
   onClose: () => void;
+  children?: React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -375,6 +381,7 @@ export function SpeedRulerControl({
       <div className="flex justify-between items-center mb-1.5 pl-0.5 pr-0.5">
         <span className="text-[10px] font-semibold text-white/90">Speed</span>
         <div className="flex items-center gap-1.5">
+          {children}
           <span className="text-[10px] text-white font-mono w-10 text-right mr-1">
             {value}x
           </span>

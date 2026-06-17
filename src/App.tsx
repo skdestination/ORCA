@@ -63,6 +63,9 @@ import {
   Maximize2,
   ArrowLeft,
   Clipboard,
+  Bell,
+  ChevronRight,
+  MoreHorizontal,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Capacitor } from "@capacitor/core";
@@ -445,6 +448,8 @@ export default function App() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micLevelsAnimFrameRef = useRef<number | null>(null);
   const recordingStartPlayheadTimeRef = useRef<number>(0);
+  const voiceoverRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
 
   // Start / Stop real mic analysis based on isRecording
   useEffect(() => {
@@ -474,6 +479,25 @@ export default function App() {
         }
         micStreamRef.current = stream;
         setHasMicPermission(true);
+
+        try {
+          let recorder: MediaRecorder;
+          try {
+            recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+          } catch {
+            recorder = new MediaRecorder(stream);
+          }
+          recordingChunksRef.current = [];
+          recorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordingChunksRef.current.push(event.data);
+            }
+          };
+          recorder.start();
+          voiceoverRecorderRef.current = recorder;
+        } catch (recorderErr) {
+          console.warn("MediaRecorder creation failed", recorderErr);
+        }
 
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         const audioCtx = new AudioContextClass();
@@ -560,19 +584,43 @@ export default function App() {
     } catch (e) {}
     return [
       {
+        id: "new-p",
+        name: "New Project",
+        ratio: "9:16",
+        updatedAt: "Recent",
+        duration: "00:12",
+        size: "85 MB",
+        thumbnail: "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=400",
+        layers: [],
+        clips: [],
+      },
+      {
         id: "1",
         name: "Summer Vacation",
-        ratio: "9:16",
+        ratio: "16:9",
         updatedAt: "2 hours ago",
         duration: "00:15",
         size: "124 MB",
-        thumbnail:
-          "https://images.unsplash.com/photo-1542204165-65bf26472b9b?auto=format&fit=crop&q=80&w=300",
+        thumbnail: "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&q=80&w=400",
+        layers: [],
+        clips: [],
+      },
+      {
+        id: "frosted-p",
+        name: "Frosted",
+        ratio: "1:1",
+        updatedAt: "1 day ago",
+        duration: "00:10",
+        size: "42 MB",
+        thumbnail: "https://images.unsplash.com/photo-1614036417651-efe5912149d8?auto=format&fit=crop&q=80&w=400",
         layers: [],
         clips: [],
       },
     ];
   });
+
+  const [sortBy, setSortBy] = useState<"recent" | "name" | "duration">("recent");
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   
   const [appScale, setAppScale] = useState(1);
   const [snappingEnabled, setSnappingEnabled] = useState<boolean>(() => {
@@ -687,6 +735,16 @@ export default function App() {
   const [smoothProcessingProgress, setSmoothProcessingProgress] = useState<
     number | null
   >(null);
+  const [opticalFlowDiagnostics, setOpticalFlowDiagnostics] = useState<{
+    clipId: string | null;
+    decodedFramesCount?: number;
+    flowComputedCount?: number;
+    timestampsVerified?: boolean;
+    avgFlowMagnitude?: number;
+    maxFlowMagnitude?: number;
+    flowVisualization?: string;
+    isFlowCorrect?: boolean;
+  } | null>(null);
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const selectedClipId = selectedClipIds.length === 1 ? selectedClipIds[0] : null;
   const setSelectedClipId = (id: string | null) => setSelectedClipIds(id === null ? [] : [id]);
@@ -861,6 +919,165 @@ export default function App() {
       })
     );
   }, []);
+
+  // Copied settings state specifically designed with support for multiple adjustment categories
+  const [copiedSettings, setCopiedSettings] = useState<{
+    adjust?: {
+      exposure?: number;
+      brightness?: number;
+      contrast?: number;
+      saturation?: number;
+      blur?: number;
+      grayscale?: number;
+      sepia?: number;
+      hueRotate?: number;
+      invert?: number;
+    };
+    volume?: {
+      volume?: number;
+    };
+    speed?: {
+      speed?: number;
+    };
+    stabilize?: {
+      stabilizationStrength?: number;
+      stabilizeMode?: string;
+    };
+    move?: {
+      scale?: number;
+      positionX?: number;
+      positionY?: number;
+      rotation?: number;
+      anchorX?: number;
+      anchorY?: number;
+    };
+    blend?: {
+      opacity?: number;
+      mixBlendMode?: string;
+    };
+    mask?: {
+      maskType?: "none" | "circle" | "square" | "half";
+      maskPositionX?: number;
+      maskPositionY?: number;
+      maskScale?: number;
+      maskRotation?: number;
+      maskFeather?: number;
+    };
+    crop?: {
+      cropRatio?: string;
+      cropX?: number;
+      cropY?: number;
+      cropW?: number;
+      cropH?: number;
+    };
+  }>({});
+
+  const handleCopySettings = (type: string) => {
+    if (!selectedClipId) return;
+    const clip = clips.find(c => c.id === selectedClipId);
+    if (!clip) return;
+
+    let copiedData: any = {};
+    if (type === "adjust") {
+      copiedData = {
+        exposure: clip.exposure ?? 0,
+        brightness: clip.brightness ?? 100,
+        contrast: clip.contrast ?? 100,
+        saturation: clip.saturation ?? 100,
+        blur: clip.blur ?? 0,
+        grayscale: clip.grayscale ?? 0,
+        sepia: clip.sepia ?? 0,
+        hueRotate: clip.hueRotate ?? 0,
+        invert: clip.invert ?? 0,
+      };
+    } else if (type === "volume") {
+      copiedData = { volume: clip.volume ?? 100 };
+    } else if (type === "speed") {
+      copiedData = { speed: clip.speed ?? 1 };
+    } else if (type === "stabilize") {
+      copiedData = {
+        stabilizationStrength: clip.stabilizationStrength ?? 50,
+        stabilizeMode: clip.stabilizeMode ?? "standard",
+      };
+    } else if (type === "move") {
+      copiedData = {
+        scale: clip.scale ?? 1,
+        positionX: clip.positionX ?? 0,
+        positionY: clip.positionY ?? 0,
+        rotation: clip.rotation ?? 0,
+        anchorX: clip.anchorX ?? 0.5,
+        anchorY: clip.anchorY ?? 0.5,
+      };
+    } else if (type === "blend") {
+      copiedData = {
+        opacity: clip.opacity ?? 100,
+        mixBlendMode: clip.mixBlendMode ?? "normal",
+      };
+    } else if (type === "mask") {
+      copiedData = {
+        maskType: clip.maskType ?? "none",
+        maskPositionX: clip.maskPositionX ?? 0.5,
+        maskPositionY: clip.maskPositionY ?? 0.5,
+        maskScale: clip.maskScale ?? 1,
+        maskRotation: clip.maskRotation ?? 0,
+        maskFeather: clip.maskFeather ?? 0.1,
+      };
+    } else if (type === "crop") {
+      copiedData = {
+        cropRatio: clip.cropRatio,
+        cropX: clip.cropX,
+        cropY: clip.cropY,
+        cropW: clip.cropW,
+        cropH: clip.cropH,
+      };
+    }
+
+    setCopiedSettings(prev => ({
+      ...prev,
+      [type]: copiedData
+    }));
+  };
+
+  const handlePasteSettings = (type: string) => {
+    if (!selectedClipId) return;
+    const settings = copiedSettings[type as keyof typeof copiedSettings];
+    if (!settings) return;
+
+    updateClipsProperties([selectedClipId], settings);
+  };
+
+  const renderCopyPasteButtons = (menuType: string) => {
+    const hasCopied = !!copiedSettings[menuType as keyof typeof copiedSettings];
+    return (
+      <div className="flex items-center gap-1 shrink-0 bg-zinc-900/60 rounded-md p-0.5 border border-white/5 shadow-inner">
+        <button
+          onClick={() => {
+            handleCopySettings(menuType);
+            setToastMessage(`Copied ${menuType} settings`);
+            setTimeout(() => setToastMessage(null), 1500);
+          }}
+          className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition pointer-events-auto"
+          title={`Copy ${menuType} settings`}
+        >
+          <Copy size={11} strokeWidth={2.5} />
+        </button>
+        <button
+          onClick={() => {
+            if (!hasCopied) return;
+            handlePasteSettings(menuType);
+            setToastMessage(`Pasted ${menuType} settings`);
+            setTimeout(() => setToastMessage(null), 1500);
+          }}
+          disabled={!hasCopied}
+          className={`p-1 rounded transition pointer-events-auto ${hasCopied ? "text-zinc-400 hover:text-indigo-400 hover:bg-zinc-800 cursor-pointer" : "text-zinc-600/70 cursor-not-allowed"}`}
+          title={`Paste ${menuType} settings`}
+        >
+          <Clipboard size={11} strokeWidth={2.5} />
+        </button>
+      </div>
+    );
+  };
+
   const isAtKeyframe = selectedClip?.keyframes?.some(k => {
     const isClose = Math.abs(currentTime - (selectedClip.leftSeconds + k.timeOffset)) < 0.05;
     if (!isClose) return false;
@@ -1309,33 +1526,88 @@ export default function App() {
       ]);
       setVoiceoverLayerId(newId);
     } else if (activeExpandedMenu !== "voiceover" && voiceoverLayerId) {
+      if (isRecording) {
+        setIsRecording(false);
+        if (voiceoverRecorderRef.current && voiceoverRecorderRef.current.state !== "inactive") {
+          const calculatedDuration = currentTime - recordingStartPlayheadTimeRef.current;
+          const finalDuration = calculatedDuration > 0.2 ? calculatedDuration : 5.0;
+          voiceoverRecorderRef.current.onstop = () => {
+            const audioBlob = new Blob(recordingChunksRef.current, { type: voiceoverRecorderRef.current?.mimeType || "audio/webm" });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            setClips((prev) => [
+              ...prev,
+              {
+                id: `clip-voiceover-${Date.now()}`,
+                layerId: voiceoverLayerId,
+                type: "audio",
+                src: audioUrl,
+                leftSeconds: recordingStartPlayheadTimeRef.current,
+                durationSeconds: finalDuration,
+                trimStartSeconds: 0,
+                volume: 100,
+              },
+            ]);
+            showToast("Recording saved to project timeline");
+          };
+          try {
+            voiceoverRecorderRef.current.stop();
+          } catch (e) {
+            console.warn(e);
+          }
+        }
+      }
       cleanupVoiceoverLayer();
     }
-  }, [activeExpandedMenu, voiceoverLayerId, cleanupVoiceoverLayer]);
+  }, [activeExpandedMenu, voiceoverLayerId, isRecording, cleanupVoiceoverLayer]);
 
   const handleRecordClick = async () => {
     if (isRecording) {
       setIsRecording(false);
-      setToastMessage("Recording saved to project timeline");
+      showToast("Recording saved to project timeline");
       
       const calculatedDuration = currentTime - recordingStartPlayheadTimeRef.current;
       const finalDuration = calculatedDuration > 0.2 ? calculatedDuration : 5.0;
 
       // Add actual voiceover clip on the active voiceover layer
       if (voiceoverLayerId) {
-        setClips((prev) => [
-          ...prev,
-          {
-            id: `clip-voiceover-${Date.now()}`,
-            layerId: voiceoverLayerId,
-            type: "audio",
-            src: "", // Simulated/represented audio track
-            leftSeconds: recordingStartPlayheadTimeRef.current,
-            durationSeconds: finalDuration,
-            trimStartSeconds: 0,
-            volume: 100,
-          },
-        ]);
+        if (voiceoverRecorderRef.current && voiceoverRecorderRef.current.state !== "inactive") {
+          voiceoverRecorderRef.current.onstop = () => {
+            const audioBlob = new Blob(recordingChunksRef.current, { type: voiceoverRecorderRef.current?.mimeType || "audio/webm" });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            setClips((prev) => [
+              ...prev,
+              {
+                id: `clip-voiceover-${Date.now()}`,
+                layerId: voiceoverLayerId,
+                type: "audio",
+                src: audioUrl,
+                leftSeconds: recordingStartPlayheadTimeRef.current,
+                durationSeconds: finalDuration,
+                trimStartSeconds: 0,
+                volume: 100,
+              },
+            ]);
+          };
+          try {
+            voiceoverRecorderRef.current.stop();
+          } catch (e) {
+            console.warn(e);
+          }
+        } else {
+          setClips((prev) => [
+            ...prev,
+            {
+              id: `clip-voiceover-${Date.now()}`,
+              layerId: voiceoverLayerId,
+              type: "audio",
+              src: "",
+              leftSeconds: recordingStartPlayheadTimeRef.current,
+              durationSeconds: finalDuration,
+              trimStartSeconds: 0,
+              volume: 100,
+            },
+          ]);
+        }
       }
       return;
     }
@@ -1343,7 +1615,7 @@ export default function App() {
     // Capture start time before starting recording
     recordingStartPlayheadTimeRef.current = currentTime;
     setIsRecording(true);
-    setToastMessage("Studio recording started...");
+    showToast("Studio recording started...");
   };
 
   const handleBackToHome = () => {
@@ -1833,7 +2105,7 @@ export default function App() {
         }
       }
 
-      const { url: newSrcUrl, fileId: newFileId } = await processSmoothSlowMoBrowser(
+      const decodeResult = await processSmoothSlowMoBrowser(
         videoSource,
         currentClip.speed || 1,
         (progress) => {
@@ -1841,7 +2113,38 @@ export default function App() {
         }
       );
 
-      setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
+      const { 
+        url: newSrcUrl, 
+        fileId: newFileId, 
+        decodedFramesCount, 
+        flowComputedCount, 
+        timestampsVerified,
+        avgFlowMagnitude,
+        maxFlowMagnitude,
+        flowVisualization,
+        isFlowCorrect
+      } = decodeResult;
+
+      setOpticalFlowDiagnostics({
+        clipId: selectedClipId,
+        decodedFramesCount,
+        flowComputedCount,
+        timestampsVerified,
+        avgFlowMagnitude,
+        maxFlowMagnitude,
+        flowVisualization,
+        isFlowCorrect
+      });
+
+      if (decodedFramesCount !== undefined) {
+        const flowMsg = flowComputedCount !== undefined ? `, ${flowComputedCount} DIS flows computed` : '';
+        setPillPopup({ 
+          message: `Slow-mo: ${decodedFramesCount} frames (${timestampsVerified ? "Verified TS" : "Non-monotonic TS!"})${flowMsg}`, 
+          type: 'info' 
+        });
+      } else {
+        setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
+      }
 
       if (selectedClipId) {
         setClips((prev) =>
@@ -1952,6 +2255,7 @@ export default function App() {
     const clip = clips.find(c => c.id === clipId);
     if (!clip || !clip.src) {
         setToastMessage("Error: Clip not found or no source!");
+        setTimeout(() => setToastMessage(null), 2000);
         return;
     }
 
@@ -2953,102 +3257,241 @@ export default function App() {
   
 );
 
-const renderHome = () => (
-  <div className="flex flex-col h-screen w-full bg-black overflow-hidden relative">
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 scrollbar-hide">
+const renderHome = () => {
+  // Sort the projects based on sortBy state
+  const sortedAndFilteredProjects = [...projects].sort((a, b) => {
+    if (sortBy === "name") {
+      return a.name.localeCompare(b.name);
+    } else if (sortBy === "duration") {
+      return a.duration.localeCompare(b.duration);
+    } else {
+      // default "recent" order: New Project first, then Summer Vacation, then Frosted, then any custom
+      const getWeight = (p: Project) => {
+        if (p.id === "new-p") return 3;
+        if (p.id === "1") return 2;
+        if (p.id === "frosted-p") return 1;
+        return 0;
+      };
+      const wA = getWeight(a);
+      const wB = getWeight(b);
+      if (wA !== wB) return wB - wA;
+      // fallback to custom index or ID
+      return b.id.localeCompare(a.id);
+    }
+  });
+
+  return (
+    <div className="flex flex-col h-screen w-full bg-black overflow-hidden relative">
+      {/* Elegant Glowing Light Leak / Arch Effect at the top-right background */}
+      <div className="absolute top-[-100px] right-[-200px] w-[600px] h-[500px] bg-[radial-gradient(circle_at_center,rgba(164,198,217,0.12)_0%,transparent_65%)] rounded-full blur-[100px] pointer-events-none z-0" />
+      <div className="absolute top-[20%] right-[-150px] w-[500px] h-[400px] bg-[radial-gradient(circle_at_center,rgba(249,115,22,0.04)_0%,transparent_60%)] rounded-full blur-[80px] pointer-events-none z-0" />
+
+      {/* Main Scrollable Viewport */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 scrollbar-hide z-10">
         <div className="min-h-full flex flex-col pb-[120px]">
-          {/* Header - ORCA Logo */}
-          <div className="pt-20 pb-10 flex justify-center items-center w-full mt-[5vh]">
-            <h1 className="text-[72px] font-black tracking-[-0.05em] text-[#A4C6D9]">
+          
+          {/* Header Area with profile info and notification bell */}
+          <div className="pt-8 pb-4 flex justify-between items-center max-w-2xl mx-auto w-full">
+            <div className="flex items-center gap-3">
+              <div className="relative w-10 h-10 rounded-full overflow-hidden border border-white/20 shadow-[0_0_12px_rgba(255,255,255,0.15)] bg-zinc-900">
+                <img
+                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=150"
+                  alt="Ritwik"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-zinc-500 font-medium text-[10px] sm:text-[11px] uppercase tracking-wider leading-none mb-0.5">
+                  {new Date().getHours() < 12 ? "Good Morning," : new Date().getHours() < 18 ? "Good Afternoon," : "Good Evening,"}
+                </span>
+                <span className="text-white font-extrabold text-sm tracking-tight leading-none">
+                  Ritwik
+                </span>
+              </div>
+            </div>
+
+            <button className="relative w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer">
+              <Bell size={18} className="transition-transform group-hover:rotate-12" />
+              <span className="absolute top-2.5 right-2.5 w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.8)]" />
+            </button>
+          </div>
+
+          {/* Premium Branded ORCA Creative Studio Logo */}
+          <div className="pt-10 pb-8 flex flex-col justify-center items-center w-full mt-[2vh] text-center">
+            <h1 className="text-7xl sm:text-8.5xl font-black tracking-[-0.04em] text-white leading-none uppercase bg-clip-text text-transparent bg-gradient-to-b from-white via-zinc-100 to-zinc-400">
               ORCA
             </h1>
+            <div className="tracking-[0.35em] text-[10px] sm:text-[11px] text-zinc-500 font-bold uppercase flex items-center justify-center gap-1.5 mt-3 pl-[0.35em]">
+              <span>Creative Studio</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_5px_rgba(249,115,22,0.6)]" />
+            </div>
+          </div>
+
+          {/* Subsection Header: Projects & Filter */}
+          <div className="flex justify-between items-center max-w-2xl mx-auto w-full mb-6 mt-4 px-1">
+            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+              Projects
+            </h2>
+            
+            {/* Sort Dropdown Selector */}
+            <div className="relative">
+              <button
+                onClick={() => setIsSortMenuOpen(!isSortMenuOpen)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/60 border border-white/5 hover:bg-zinc-800/80 hover:border-white/15 text-zinc-300 text-xs font-bold leading-none cursor-pointer transition-all active:scale-95 z-20"
+              >
+                <span>
+                  {sortBy === "recent" ? "Recent" : sortBy === "name" ? "Alphabetical" : "Duration"}
+                </span>
+                <ChevronDown size={12} className={`text-zinc-500 transition-transform duration-200 ${isSortMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              <AnimatePresence>
+                {isSortMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: -5 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -5 }}
+                    className="absolute right-0 top-8 w-36 bg-zinc-900/95 border border-white/10 rounded-xl p-1 shadow-[0_12px_40px_rgba(0,0,0,0.8)] backdrop-blur-xl z-50"
+                  >
+                    {[
+                      { value: "recent", label: "Recent Order" },
+                      { value: "name", label: "Alphabetical" },
+                      { value: "duration", label: "Duration" },
+                    ].map((item) => (
+                      <button
+                        key={item.value}
+                        onClick={() => {
+                          setSortBy(item.value as any);
+                          setIsSortMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center justify-between ${
+                          sortBy === item.value ? "bg-white/[0.05] text-white" : "text-zinc-400 hover:bg-white/[0.02] hover:text-zinc-200"
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        {sortBy === item.value && <Check size={11} className="text-emerald-400" />}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
 
           {/* Project List */}
-          <div className="flex flex-col gap-5 max-w-2xl mx-auto w-full">
-            {projects.map((p) => (
+          <div className="flex flex-col gap-4.5 max-w-2xl mx-auto w-full">
+            {sortedAndFilteredProjects.map((p) => (
               <div
                 key={p.id}
-                className="relative h-[150px] w-full rounded-[40px] overflow-hidden cursor-pointer shadow-lg active:scale-[0.98] transition-transform group"
+                className="relative h-[160px] w-full rounded-[30px] overflow-hidden cursor-pointer bg-zinc-950/20 hover:bg-zinc-950/30 backdrop-blur-xl border border-white/10 hover:border-white/20 active:scale-[0.99] transition-all duration-300 shadow-[0_12px_40px_-15px_rgba(0,0,0,0.8)] flex group"
                 onClick={() => openProject(p)}
               >
-                {/* Background Image */}
-                <div className="absolute inset-0 bg-zinc-900">
+                {/* Glossy sheen base texture overlay */}
+                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.01] to-white/[0.05] pointer-events-none z-0" />
+
+                {/* Highly reflective glass gleam transition line */}
+                <div className="absolute inset-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/[0.07] to-transparent -skew-x-[25deg] -translate-x-[150%] group-hover:translate-x-[220%] transition-transform duration-1000 ease-[cubic-bezier(0.25,1,0.5,1)] pointer-events-none z-20" />
+
+                {/* Beveled edge light reflections */}
+                <div className="absolute inset-x-0 top-0 h-[1.5px] bg-gradient-to-r from-white/0 via-white/25 to-white/0 opacity-80 group-hover:opacity-100 transition-opacity pointer-events-none z-20" />
+                <div className="absolute inset-y-0 left-0 w-[1.5px] bg-gradient-to-b from-white/10 to-transparent pointer-events-none z-20" />
+
+                {/* Left Text Info Side */}
+                <div className="flex-1 p-5 flex flex-col justify-between h-full z-10 relative">
+                  {/* Top: Tag */}
+                  <div className="flex items-center gap-1.5 bg-white/[0.03] border border-white/5 rounded-full px-2.5 py-0.5 w-fit">
+                    <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_6px_#f97316]" />
+                    <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest leading-none">
+                      {p.ratio === "9:16" ? "Reels" : p.ratio === "16:9" ? "YouTube" : "Concept"}
+                    </span>
+                  </div>
+
+                  {/* Middle: Title & Label */}
+                  <div className="mt-1">
+                    <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight leading-none flex items-center gap-1.5">
+                      {p.name}
+                    </h3>
+                    <p className="text-[11.5px] sm:text-[12.5px] font-medium text-zinc-400 leading-snug mt-1.5 max-w-[95%] line-clamp-2">
+                      Concept project focusing on simplicity & usability.
+                    </p>
+                  </div>
+
+                  {/* Bottom: Specs */}
+                  <div className="flex items-center gap-1.5 text-zinc-500 text-[10px] font-bold tracking-wider uppercase mt-1">
+                    <Clock size={11} className="text-zinc-500" />
+                    <span>{p.duration || "00:12"}</span>
+                    <span className="text-zinc-600">•</span>
+                    <span>Draft</span>
+                  </div>
+                </div>
+
+                {/* Right Image/Artwork Side */}
+                <div className="w-[45%] h-full shrink-0 relative overflow-hidden z-10">
                   <img
                     src={p.thumbnail || undefined}
                     alt=""
-                    className="w-full h-full object-cover object-left group-hover:scale-105 transition-transform duration-700"
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                    referrerPolicy="no-referrer"
                   />
-                </div>
-                
-                {/* Frosted Overlay */}
-                <div 
-                  className="absolute inset-0 bg-black/60 backdrop-blur-2xl transition-opacity duration-300"
-                  style={{ 
-                    maskImage: 'linear-gradient(to right, transparent 0%, transparent 25%, black 50%, black 100%)', 
-                    WebkitMaskImage: 'linear-gradient(to right, transparent 0%, transparent 25%, black 50%, black 100%)' 
-                  }}
-                ></div>
+                  {/* Frosted vignette masking division */}
+                  <div className="absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-zinc-950/40 via-zinc-950/20 to-transparent pointer-events-none" />
 
-                {/* Border effect like glass */}
-                <div className="absolute inset-0 border-[1.5px] border-white/10 rounded-[40px] pointer-events-none"></div>
+                  {/* Three-dots menu button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProjectMenuOpenId(projectMenuOpenId === p.id ? null : p.id);
+                    }}
+                    className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-black/50 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-black/75 hover:border-white/25 transition-all backdrop-blur-md z-30 pointer-events-auto"
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
 
-                {/* Content inside */}
-                <div className="absolute inset-0 flex items-center p-6">
-                  {/* Left spacer for clear image */}
-                  <div className="w-[30%] h-full shrink-0"></div>
-
-                  {/* Center Content */}
-                  <div className="flex-1 flex justify-center items-start flex-col pl-4 sm:pl-8">
-                    <h3 className="text-[26px] font-bold text-white tracking-tight mb-1 flex items-center gap-2">
-                      {p.name}
-                      <span className="flex items-center justify-center w-4 h-4 rounded-full bg-emerald-500 text-white shadow-[0_0_8px_rgba(16,185,129,0.5)]">
-                        <Check size={10} strokeWidth={4} />
-                      </span>
-                    </h3>
-                    <p className="text-[14px] font-medium text-white/60 leading-snug max-w-[220px]">
-                      Concept project focusing on simplicity & usability.
-                    </p>
-                    <div className="flex items-center gap-4 mt-3">
-                       <div className="flex items-center gap-1.5 text-white/50 text-xs font-semibold uppercase tracking-wider">
-                         <Clock size={13}/>
-                         {p.duration}
-                       </div>
-                    </div>
-                  </div>
-
-                  {/* Actions on right */}
-                  <div className="flex flex-col items-end justify-center gap-3 pr-2">
-                    <button
-                      className="h-10 px-5 rounded-full bg-white text-black font-bold text-sm tracking-wide flex items-center justify-center hover:scale-105 transition-transform z-10 shadow-[0_4px_14px_rgba(255,255,255,0.25)]"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openProject(p);
-                      }}
-                    >
-                      Open <ArrowUp size={14} className="rotate-45 ml-1" />
-                    </button>
-                    <div className="flex gap-2">
-                      <button
-                        className="w-[38px] h-[38px] rounded-full bg-white/10 border border-white/5 flex items-center justify-center text-white/80 hover:text-white hover:bg-white/20 transition-all z-10 backdrop-blur-md"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          duplicateProject(p);
-                        }}
+                  {/* Action Menu overlay per project card */}
+                  <AnimatePresence>
+                    {projectMenuOpenId === p.id && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.9, y: -5 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.9, y: -5 }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute right-3.5 top-13 w-32 bg-zinc-900/95 border border-white/10 rounded-2xl p-1.5 shadow-[0_12px_36px_rgba(0,0,0,0.9)] backdrop-blur-xl z-40 pointer-events-auto"
                       >
-                        <Copy size={15} />
-                      </button>
-                      <button
-                        className="w-[38px] h-[38px] rounded-full bg-white/10 border border-white/5 flex items-center justify-center text-red-400/80 hover:text-red-400 hover:bg-red-500/20 transition-all z-10 backdrop-blur-md"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setProjectToDelete(p.id);
-                        }}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                  </div>
+                        <button
+                          onClick={() => {
+                            setProjectMenuOpenId(null);
+                            openProject(p);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs font-semibold text-white hover:bg-white/[0.05] rounded-xl flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Open</span>
+                          <ChevronRight size={11} className="text-zinc-500" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setProjectMenuOpenId(null);
+                            duplicateProject(p);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs font-semibold text-white hover:bg-white/[0.05] rounded-xl flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Duplicate</span>
+                          <Copy size={11} className="text-zinc-400" />
+                        </button>
+                        <div className="h-[1px] bg-white/5 my-1" />
+                        <button
+                          onClick={() => {
+                            setProjectMenuOpenId(null);
+                            setProjectToDelete(p.id);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs font-semibold text-red-400 hover:bg-red-500/10 rounded-xl flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Delete</span>
+                          <Trash2 size={11} className="text-red-400/70" />
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               </div>
             ))}
@@ -3056,108 +3499,33 @@ const renderHome = () => (
         </div>
       </div>
 
-      {/* SVG Liquid Gooey Filter Definition */}
-      <svg className="absolute w-0 h-0 pointer-events-none" style={{ position: "absolute", width: 0, height: 0 }}>
-        <defs>
-          <filter id="liquid-gooey" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo" />
-            <feComposite in="SourceGraphic" in2="goo" operator="atop" />
-          </filter>
-        </defs>
-      </svg>
+      {/* Persistent Rounded Floating Footer Row */}
+      <div className="absolute bottom-9 left-0 right-0 flex justify-center items-center px-6 z-40 pointer-events-none">
+        <div className="flex items-center gap-3 w-full max-w-[340px] pointer-events-auto">
+          {/* New Project Button */}
+          <button
+            onClick={() => setIsCreatingProject(true)}
+            className="relative flex-1 h-14 rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
+          >
+            {/* Glossy shine */}
+            <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.01] to-white/[0.04] pointer-events-none" />
+            <div className="absolute inset-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/[0.1] to-transparent -skew-x-[20deg] -translate-x-[150%] group-hover:translate-x-[250%] transition-transform duration-1000 ease-out pointer-events-none" />
+            <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/15 to-transparent pointer-events-none" />
+            <PlusIcon size={16} className="text-zinc-400 group-hover:text-white transition-colors" />
+            <span>New Project</span>
+          </button>
 
-      {/* Floating Action Menu for Home */}
-      <div className="absolute bottom-10 left-0 right-0 flex justify-center items-center px-6 z-[60] pointer-events-none">
-        <div className="w-[340px] h-[64px] relative pointer-events-auto select-none">
-          
-          {/* Liquid Gooey Background Layer */}
-          <div className="absolute inset-0 pointer-events-none overflow-visible" style={{ filter: "url(#liquid-gooey)" }}>
-            {/* Main Pill BG blob */}
-            <motion.div
-              animate={{
-                width: isCreatingProject ? 340 : 260,
-                backgroundColor: isCreatingProject ? "#ffffff" : "#1e1e22",
-                borderColor: isCreatingProject ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.15)",
-              }}
-              transition={{ type: "spring", stiffness: 150, damping: 18, mass: 1 }}
-              className="absolute left-0 top-0 h-full rounded-full border-[2.5px] shadow-[0_8px_30px_rgba(0,0,0,0.6)]"
-            />
-
-            {/* Settings Circle BG blob */}
-            <motion.div
-              initial={{
-                left: 138,
-                scale: 0.1,
-                opacity: 0,
-                backgroundColor: "#1e1e22",
-              }}
-              animate={{
-                left: isCreatingProject ? 138 : 276,
-                scale: isCreatingProject ? 0.1 : 1,
-                opacity: isCreatingProject ? 0 : 1,
-                backgroundColor: isCreatingProject ? "#ffffff" : "#1e1e22",
-                borderColor: isCreatingProject ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.15)",
-              }}
-              transition={{ type: "spring", stiffness: 130, damping: 14, mass: 1 }}
-              className="absolute top-0 w-[64px] h-[64px] rounded-full border-[2.5px] shadow-[0_8px_30px_rgba(0,0,0,0.6)]"
-            />
-          </div>
-
-          {/* Interactive Foreground Label & Touch Targets (Pristine & Crisp - no blur) */}
-          <div className="absolute inset-0 z-10 flex items-center">
-            {/* Pill text container */}
-            <div 
-              className="absolute left-0 top-0 h-full flex items-center justify-center transition-all duration-300" 
-              style={{ width: isCreatingProject ? "340px" : "260px" }}
-            >
-              <AnimatePresence mode="wait">
-                {!isCreatingProject ? (
-                  <motion.button
-                    key="lbl-new-project"
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ duration: 0.2 }}
-                    onClick={() => setIsCreatingProject(true)}
-                    className="w-full h-full text-white font-extrabold tracking-tight text-lg uppercase flex items-center justify-center cursor-pointer focus:outline-none hover:opacity-80 active:scale-[0.98] transition-transform duration-100"
-                  >
-                    New Project
-                  </motion.button>
-                ) : (
-                  <motion.button
-                    key="lbl-create-project"
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ duration: 0.2 }}
-                    onClick={() => handleCreateProject(focusedRatio)}
-                    className="w-full h-full text-zinc-950 font-black tracking-tight text-xl uppercase flex items-center justify-center cursor-pointer focus:outline-none hover:opacity-80 active:scale-[0.98] transition-transform duration-100"
-                  >
-                    Create
-                  </motion.button>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Settings button container */}
-            <AnimatePresence>
-              {!isCreatingProject && (
-                <motion.button
-                  key="fg-settings-btn"
-                  initial={{ opacity: 0, scale: 0.5, rotate: -45 }}
-                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                  exit={{ opacity: 0, scale: 0.5, rotate: 45 }}
-                  transition={{ type: "spring", stiffness: 180, damping: 15 }}
-                  onClick={() => setCurrentScreen("settings")}
-                  className="absolute right-0 top-0 w-[64px] h-[64px] flex items-center justify-center text-zinc-400 hover:text-white cursor-pointer focus:outline-none group"
-                >
-                  <Settings size={28} className="transform group-hover:rotate-45 transition-transform duration-300" />
-                </motion.button>
-              )}
-            </AnimatePresence>
-          </div>
-
+          {/* Settings Button */}
+          <button
+            onClick={() => setCurrentScreen("settings")}
+            className="relative w-14 h-14 rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
+          >
+            {/* Glossy shine */}
+            <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.01] to-white/[0.04] pointer-events-none" />
+            <div className="absolute inset-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/[0.1] to-transparent -skew-x-[20deg] -translate-x-[150%] group-hover:translate-x-[250%] transition-transform duration-1000 ease-out pointer-events-none" />
+            <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/15 to-transparent pointer-events-none" />
+            <Settings size={18} className="group-hover:rotate-45 transition-transform duration-300" />
+          </button>
         </div>
       </div>
 
@@ -3311,8 +3679,8 @@ const renderHome = () => (
         )}
       </AnimatePresence>
     </div>
-  
-);
+  );
+};
 
 const renderEditor = () => (
   <div className="flex flex-col h-screen w-full bg-[#1e1e20] overflow-hidden">
@@ -3836,9 +4204,13 @@ const renderEditor = () => (
                       mixBlendMode: activeClip.mixBlendMode as any || "normal",
                       filter: `
                         blur(${(activeClip.blur || 0) + extraBlur}px)
-                        brightness(${activeClip.brightness === undefined ? 100 : activeClip.brightness}%)
+                        brightness(${(activeClip.brightness === undefined ? 100 : activeClip.brightness) + (activeClip.exposure || 0)}%)
                         contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%)
                         saturate(${activeClip.saturation === undefined ? 100 : activeClip.saturation}%)
+                        sepia(${activeClip.sepia || 0}%)
+                        grayscale(${activeClip.grayscale || 0}%)
+                        hue-rotate(${activeClip.hueRotate || 0}deg)
+                        invert(${activeClip.invert || 0}%)
                       `.trim(),
                       ...(activeClip.cropRatio ? { aspectRatio: activeClip.cropRatio.replace(":", "/") } : {})
                     };
@@ -4289,46 +4661,48 @@ const renderEditor = () => (
           </div>
 
           {/* Integrated Multi-State Information Popups in same Pill shape design */}
-          <div className="absolute left-[110px] sm:left-[145px] lg:left-[165px] right-[215px] sm:right-[315px] lg:right-[355px] bottom-0 top-[29px] flex items-center justify-center pointer-events-none z-50">
-            <AnimatePresence>
-              {(pillPopup || toastMessage) && (() => {
-                const message = pillPopup ? pillPopup.message : toastMessage;
-                const len = message ? message.length : 0;
-                let fontSizeStyle = "text-[11px] sm:text-[12px]";
-                if (len > 35) {
-                  fontSizeStyle = "text-[8px] sm:text-[9.5px]";
-                } else if (len > 25) {
-                  fontSizeStyle = "text-[9px] sm:text-[10.5px]";
-                } else if (len > 15) {
-                  fontSizeStyle = "text-[10px] sm:text-[11px]";
-                }
+          {!(multiSelectActive || (selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "text") || !!activeExpandedMenu) && (
+            <div className="absolute left-1/2 -translate-x-1/2 top-4 flex items-center justify-center pointer-events-none z-[150]">
+              <AnimatePresence>
+                {(pillPopup || toastMessage) && (() => {
+                  const message = pillPopup ? pillPopup.message : toastMessage;
+                  const len = message ? message.length : 0;
+                  let fontSizeStyle = "text-[11px] sm:text-[12px]";
+                  if (len > 35) {
+                    fontSizeStyle = "text-[8px] sm:text-[9.5px]";
+                  } else if (len > 25) {
+                    fontSizeStyle = "text-[9px] sm:text-[10.5px]";
+                  } else if (len > 15) {
+                    fontSizeStyle = "text-[10px] sm:text-[11px]";
+                  }
 
-                return (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.9, y: 5 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.9, y: 5 }}
-                    transition={{ duration: 0.15 }}
-                    className="pointer-events-auto shrink-0 select-none"
-                  >
-                    <div className="bg-[#2A2A2D]/95 backdrop-blur-md rounded-full border border-white/10 shadow-lg px-2 sm:px-3 h-7 sm:h-8 flex items-center justify-center gap-1.5 w-[140px] sm:w-[200px] select-none text-center">
-                      {pillPopup && pillPopup.type === 'loading' && pillPopup.progress !== undefined && (
-                        <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 relative shrink-0">
-                          <svg className="w-full h-full" viewBox="0 0 20 20">
-                            <circle cx="10" cy="10" r="9" className="stroke-zinc-700/60" strokeWidth="2.5" fill="none" />
-                            <circle cx="10" cy="10" r="9" className="stroke-indigo-400" strokeWidth="2.5" fill="none" strokeDasharray={`${pillPopup.progress * 2 * Math.PI * 9 / 100} 1000`} transform="rotate(-90 10 10)" />
-                          </svg>
-                        </div>
-                      )}
-                      <span className={`font-semibold tracking-tight text-white/95 truncate w-full ${fontSizeStyle}`}>
-                        {message}
-                      </span>
-                    </div>
-                  </motion.div>
-                );
-              })()}
-            </AnimatePresence>
-          </div>
+                  return (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.9, y: -5 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.9, y: -5 }}
+                      transition={{ duration: 0.15 }}
+                      className="pointer-events-auto shrink-0 select-none"
+                    >
+                      <div className="bg-[#2A2A2D]/95 backdrop-blur-md rounded-full border border-white/10 shadow-lg px-2 sm:px-3 h-7 sm:h-8 flex items-center justify-center gap-1.5 w-[140px] sm:w-[200px] select-none text-center">
+                        {pillPopup && pillPopup.type === 'loading' && pillPopup.progress !== undefined && (
+                          <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 relative shrink-0">
+                            <svg className="w-full h-full" viewBox="0 0 20 20">
+                              <circle cx="10" cy="10" r="9" className="stroke-zinc-700/60" strokeWidth="2.5" fill="none" />
+                              <circle cx="10" cy="10" r="9" className="stroke-indigo-400" strokeWidth="2.5" fill="none" strokeDasharray={`${pillPopup.progress * 2 * Math.PI * 9 / 100} 1000`} transform="rotate(-90 10 10)" />
+                            </svg>
+                          </div>
+                        )}
+                        <span className={`font-semibold tracking-tight text-white/95 truncate w-full ${fontSizeStyle}`}>
+                          {message}
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })()}
+              </AnimatePresence>
+            </div>
+          )}
 
         </div>
       </main>
@@ -5380,7 +5754,7 @@ const renderEditor = () => (
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[320px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "transition" && transitionModal && (() => {
@@ -5524,12 +5898,15 @@ const renderEditor = () => (
                       </div>
                       Apply to all
                     </button>
-                    <button
-                      onClick={() => setActiveExpandedMenu(null)}
-                      className="text-zinc-400 hover:text-white pb-0.5 pr-0.5"
-                    >
-                      <Check size={16} strokeWidth={2} />
-                    </button>
+                    <div className="flex items-center gap-1.5 pl-2">
+                      {renderCopyPasteButtons("volume")}
+                      <button
+                        onClick={() => setActiveExpandedMenu(null)}
+                        className="text-zinc-400 hover:text-white pb-0.5 pr-0.5 flex items-center justify-center p-1 rounded-md hover:bg-zinc-800 transition"
+                      >
+                        <Check size={16} strokeWidth={2} />
+                      </button>
+                    </div>
                   </div>
                   
                   <div className="flex items-center w-full gap-3 px-0.5 mb-1 mt-0.5">
@@ -5650,7 +6027,9 @@ const renderEditor = () => (
                       }
                     }}
                     onClose={() => setActiveExpandedMenu(null)}
-                  />
+                  >
+                    {renderCopyPasteButtons("speed")}
+                  </SpeedRulerControl>
                   <div className="flex gap-1.5 pb-2">
                     <button
                       onClick={async () => {
@@ -5695,7 +6074,7 @@ const renderEditor = () => (
                             }
                           }
 
-                          const { url: newSrcUrl, fileId: newFileId } = await processSmoothSlowMoBrowser(
+                           const decodeResult = await processSmoothSlowMoBrowser(
                             videoSource,
                             currentClip.speed || 1,
                             (progress) => {
@@ -5705,8 +6084,39 @@ const renderEditor = () => (
                             }
                           );
 
+                          const { 
+                            url: newSrcUrl, 
+                            fileId: newFileId, 
+                            decodedFramesCount, 
+                            flowComputedCount, 
+                            timestampsVerified,
+                            avgFlowMagnitude,
+                            maxFlowMagnitude,
+                            flowVisualization,
+                            isFlowCorrect
+                          } = decodeResult;
+
+                          setOpticalFlowDiagnostics({
+                            clipId: selectedClipId,
+                            decodedFramesCount,
+                            flowComputedCount,
+                            timestampsVerified,
+                            avgFlowMagnitude,
+                            maxFlowMagnitude,
+                            flowVisualization,
+                            isFlowCorrect
+                          });
+
                           setSmoothProcessingProgress(100);
-                          setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
+                          if (decodedFramesCount !== undefined) {
+                            const flowMsg = flowComputedCount !== undefined ? `, ${flowComputedCount} DIS flows computed` : '';
+                            setPillPopup({ 
+                              message: `Slow-mo: ${decodedFramesCount} frames (${timestampsVerified ? "Verified TS" : "Non-monotonic TS!"})${flowMsg}`, 
+                              type: 'info' 
+                            });
+                          } else {
+                            setPillPopup({ message: "Smooth Slow-mo Applied", type: 'info' });
+                          }
 
                           if (selectedClipId) {
                             setClips((prev) =>
@@ -5812,6 +6222,51 @@ const renderEditor = () => (
                             </div>
                           </div>
                         </div>
+
+                        {/* W1D5 Optical Flow Diagnostics */}
+                        {c.opticalFlow && (
+                          <div className="mt-2.5 pt-2.5 flex flex-col gap-1.5 border-t border-white/5">
+                            <div className="flex justify-between items-center text-[7.5px] font-bold text-indigo-400 uppercase tracking-widest leading-none">
+                              <span>DIS Optical Flow (W1D5)</span>
+                              <span className={`text-[7px] px-1 py-[1.5px] rounded font-mono font-semibold ${opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.isFlowCorrect ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-zinc-500/10 text-zinc-400 border border-white/5"}`}>
+                                {opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.isFlowCorrect ? "Verified Correct" : "Analyzing Flow..."}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-1 text-center mt-0.5">
+                              <div className="bg-white/[0.02] border border-white/5 rounded py-1 px-1.5 flex flex-col justify-center">
+                                <div className="text-[6.5px] text-zinc-500 font-bold uppercase leading-none">Mean Velocity</div>
+                                <div className="text-[8.5px] text-zinc-100 mt-1 leading-none font-mono font-semibold">
+                                  {opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.avgFlowMagnitude !== undefined ? `${opticalFlowDiagnostics.avgFlowMagnitude.toFixed(3)} px` : "—"}
+                                </div>
+                              </div>
+                              <div className="bg-white/[0.02] border border-white/5 rounded py-1 px-1.5 flex flex-col justify-center">
+                                <div className="text-[6.5px] text-zinc-500 font-bold uppercase leading-none">Peak Displacement</div>
+                                <div className="text-[8.5px] text-zinc-100 mt-1 leading-none font-mono font-semibold">
+                                  {opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.maxFlowMagnitude !== undefined ? `${opticalFlowDiagnostics.maxFlowMagnitude.toFixed(2)} px` : "—"}
+                                </div>
+                              </div>
+                            </div>
+
+                            {opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.flowVisualization ? (
+                              <div className="mt-0.5 rounded border border-white/5 overflow-hidden relative group">
+                                <img 
+                                  src={opticalFlowDiagnostics.flowVisualization} 
+                                  alt="DIS Optical Flow Frame" 
+                                  className="w-full h-auto aspect-video object-cover"
+                                />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent flex items-end justify-between p-1.5">
+                                  <span className="text-[7px] font-mono text-zinc-300">Peak Motion Vector Field</span>
+                                  <span className="text-[7px] font-mono text-indigo-400 font-semibold">{opticalFlowDiagnostics.flowComputedCount} DIS cycles</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 bg-white/[0.01] border border-dashed border-white/5 text-[7.5px] py-2 px-2 text-zinc-500 text-center rounded leading-snug">
+                                Vector tracking lines are plotted overlaying the active video stream once rendering has successfully executed.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -5862,12 +6317,15 @@ const renderEditor = () => (
                     {/* Header */}
                     <div className="flex justify-between items-center w-full mb-1.5 px-0.5 mt-1">
                       <span className="text-[10px] font-extrabold text-indigo-400 uppercase tracking-widest">Stabilizer</span>
-                      <button 
-                        onClick={() => setActiveExpandedMenu(null)}
-                        className="text-zinc-500 hover:text-white p-0.5"
-                      >
-                        <Check size={12} className="text-emerald-400" />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        {renderCopyPasteButtons("stabilize")}
+                        <button 
+                          onClick={() => setActiveExpandedMenu(null)}
+                          className="text-zinc-500 hover:text-white p-1 rounded-md hover:bg-zinc-805/40 transition flex items-center justify-center"
+                        >
+                          <Check size={12} className="text-emerald-400" />
+                        </button>
+                      </div>
                     </div>
 
                     {isStabilizing ? (
@@ -5955,6 +6413,8 @@ const renderEditor = () => (
                       Transform
                     </span>
                     <div className="flex items-center gap-1.5">
+                      {renderCopyPasteButtons("move")}
+                      <div className="w-px h-3 bg-zinc-700/80"></div>
                       <button
                         onClick={() => {
                           const clip = clips.find((c) => c.id === selectedClipId);
@@ -5980,14 +6440,14 @@ const renderEditor = () => (
                             ),
                           );
                         }}
-                        className="text-[7.5px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-2 py-0.5 rounded font-black text-zinc-400 uppercase tracking-wider transition-all"
+                        className="text-[7.5px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-1.5 py-0.5 rounded font-black text-zinc-400 uppercase tracking-wider transition-all"
                       >
                         Reset
                       </button>
                       <div className="w-px h-3 bg-zinc-700/80"></div>
                       <button
                         onClick={() => setActiveExpandedMenu(null)}
-                        className="text-emerald-400 hover:text-emerald-300 ml-0.5 p-0.5 rounded-full hover:bg-white/5 transition-colors"
+                        className="text-emerald-400 hover:text-emerald-300 p-0.5 rounded-full hover:bg-white/5 transition-colors"
                       >
                         <Check size={14} />
                       </button>
@@ -6271,10 +6731,11 @@ const renderEditor = () => (
                     <span className="text-[10px] font-semibold text-white/90">
                       Blend & Opacity
                     </span>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      {renderCopyPasteButtons("blend")}
                       <button
                         onClick={() => setActiveExpandedMenu(null)}
-                        className="text-zinc-400 hover:text-white"
+                        className="text-zinc-400 hover:text-white p-1 rounded-md hover:bg-zinc-805/40 transition flex items-center justify-center"
                       >
                         <Check size={14} />
                       </button>
@@ -6334,26 +6795,30 @@ const renderEditor = () => (
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: 10 }}
                   transition={{ duration: 0.2 }}
-                  className="bg-zinc-800 rounded-xl shadow-xl border border-white/10 overflow-hidden w-[300px] p-2"
+                  className="bg-zinc-800 rounded-xl shadow-xl border border-white/10 overflow-hidden w-[217px] p-2"
                 >
                   <div className="flex justify-between items-center w-full px-2 mb-2">
                     <span className="text-[10px] font-semibold text-white/90">
                       Adjustments
                     </span>
-                    <button
-                      onClick={() => setActiveExpandedMenu(null)}
-                      className="text-zinc-400 hover:text-white"
-                    >
-                      <Check size={14} />
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {renderCopyPasteButtons("adjust")}
+                      <button
+                        onClick={() => setActiveExpandedMenu(null)}
+                        className="text-zinc-400 hover:text-white p-1 rounded-md hover:bg-zinc-700/50 transition flex items-center justify-center"
+                      >
+                        <Check size={14} />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-col gap-2 max-h-[160px] overflow-y-auto scrollbar-hide px-2 pb-2">
+                  <div className="flex flex-col gap-2.5 max-h-[220px] overflow-y-auto scrollbar-hide px-2 pb-2">
                     <CompactRulerControl
-                      label="Blur"
-                      value={currentSelectedClipInterpolatedProps?.blur || 0}
-                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: val }); }}
-                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: 0 }); }}
-                      min={0} max={100} step={1} unit="%" sensitivity={0.5}
+                      label="Exposure"
+                      value={currentSelectedClipInterpolatedProps?.exposure || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { exposure: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { exposure: 0 }); }}
+                      min={-100} max={100} step={1} unit="%" sensitivity={1}
+                      size="small"
                     />
                     <CompactRulerControl
                       label="Brightness"
@@ -6361,6 +6826,7 @@ const renderEditor = () => (
                       onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { brightness: val }); }}
                       onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { brightness: 100 }); }}
                       min={0} max={200} step={1} unit="%" sensitivity={1}
+                      size="small"
                     />
                     <CompactRulerControl
                       label="Contrast"
@@ -6368,6 +6834,7 @@ const renderEditor = () => (
                       onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { contrast: val }); }}
                       onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { contrast: 100 }); }}
                       min={0} max={200} step={1} unit="%" sensitivity={1}
+                      size="small"
                     />
                     <CompactRulerControl
                       label="Saturation"
@@ -6375,6 +6842,47 @@ const renderEditor = () => (
                       onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { saturation: val }); }}
                       onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { saturation: 100 }); }}
                       min={0} max={200} step={1} unit="%" sensitivity={1}
+                      size="small"
+                    />
+                    <CompactRulerControl
+                      label="Blur"
+                      value={currentSelectedClipInterpolatedProps?.blur || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { blur: 0 }); }}
+                      min={0} max={100} step={1} unit="%" sensitivity={0.5}
+                      size="small"
+                    />
+                    <CompactRulerControl
+                      label="Grayscale"
+                      value={currentSelectedClipInterpolatedProps?.grayscale || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { grayscale: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { grayscale: 0 }); }}
+                      min={0} max={100} step={1} unit="%" sensitivity={1}
+                      size="small"
+                    />
+                    <CompactRulerControl
+                      label="Sepia"
+                      value={currentSelectedClipInterpolatedProps?.sepia || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { sepia: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { sepia: 0 }); }}
+                      min={0} max={100} step={1} unit="%" sensitivity={1}
+                      size="small"
+                    />
+                    <CompactRulerControl
+                      label="Hue Shift"
+                      value={currentSelectedClipInterpolatedProps?.hueRotate || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { hueRotate: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { hueRotate: 0 }); }}
+                      min={-180} max={180} step={1} unit="°" sensitivity={1.5}
+                      size="small"
+                    />
+                    <CompactRulerControl
+                      label="Invert"
+                      value={currentSelectedClipInterpolatedProps?.invert || 0}
+                      onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { invert: val }); }}
+                      onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { invert: 0 }); }}
+                      min={0} max={100} step={1} unit="%" sensitivity={1}
+                      size="small"
                     />
                   </div>
                 </motion.div>
@@ -6407,6 +6915,8 @@ const renderEditor = () => (
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
+                        {renderCopyPasteButtons("crop")}
+                        <div className="w-px h-3 bg-zinc-700/80 mx-0.5"></div>
                         <button
                           onClick={() => {
                             setClips(prev => prev.map(c => c.id === selectedClipId ? {
@@ -6415,7 +6925,7 @@ const renderEditor = () => (
                               cropRect: { top: 0, right: 0, bottom: 0, left: 0 }
                             } : c));
                           }}
-                          className="text-[8px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-2 py-0.5 rounded font-bold text-zinc-400 uppercase tracking-wider transition-all"
+                          className="text-[8px] bg-zinc-800 hover:bg-zinc-700 hover:text-white px-1.5 py-0.5 rounded font-bold text-zinc-400 uppercase tracking-wider transition-all"
                         >
                           Reset
                         </button>
@@ -6506,10 +7016,11 @@ const renderEditor = () => (
                     <span className="text-[10px] font-semibold text-white/90">
                       Mask Shape
                     </span>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      {renderCopyPasteButtons("mask")}
                       <button
                         onClick={() => setActiveExpandedMenu(null)}
-                        className="text-zinc-400 hover:text-white"
+                        className="text-zinc-400 hover:text-white p-1 rounded-md hover:bg-zinc-805/40 transition flex items-center justify-center"
                       >
                         <Check size={14} />
                       </button>

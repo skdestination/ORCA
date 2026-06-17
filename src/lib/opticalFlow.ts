@@ -16,6 +16,20 @@ export interface SmoothSlowMotionPlugin {
     height: number;
     fps: number;
   }>;
+  decodeAllFrames(options: { inputPath: string }): Promise<{
+    success: boolean;
+    decodedFramesCount: number;
+    flowComputedCount?: number;
+    timestampsVerified: boolean;
+    verificationError?: string;
+    sampledTimestampsUs: number[];
+    firstTimestampUs?: number;
+    lastTimestampUs?: number;
+    avgFlowMagnitude?: number;
+    maxFlowMagnitude?: number;
+    flowVisualization?: string;
+    isFlowCorrect?: boolean;
+  }>;
 }
 
 const SmoothSlowMotionNative = registerPlugin<SmoothSlowMotionPlugin>("SmoothSlowMotion");
@@ -108,7 +122,20 @@ export async function processSmoothSlowMoBrowser(
   videoBlobUrlOrBlob: string | Blob,
   speedFactor: number,
   onProgress: (progress: number) => void
-): Promise<{ url: string; fileId: string }> {
+): Promise<{
+  url: string;
+  fileId: string;
+  decodedFramesCount?: number;
+  flowComputedCount?: number;
+  timestampsVerified?: boolean;
+  sampledTimestampsUs?: number[];
+  firstTimestampUs?: number;
+  lastTimestampUs?: number;
+  avgFlowMagnitude?: number;
+  maxFlowMagnitude?: number;
+  flowVisualization?: string;
+  isFlowCorrect?: boolean;
+}> {
 
   if (!Capacitor.isNativePlatform()) {
     console.log("Web platform detected. Native plugin not used.");
@@ -145,20 +172,42 @@ export async function processSmoothSlowMoBrowser(
   const rawInput = inputUri.uri.replace("file://", "");
   
   try {
+    // 1. Send path to verify receive video path
     const result = await SmoothSlowMotionNative.receiveVideoPath({
       inputPath: rawInput
     });
-    console.log("Plugin verified returning:", result);
+    console.log("Plugin verified receiveVideoPath returning:", result);
+    onProgress(30);
+
+    // 2. Decode all frames and verify timestamps
+    console.log("Invoking native decodeAllFrames pipeline for timestamp verification...");
+    const decodeResult = await SmoothSlowMotionNative.decodeAllFrames({
+      inputPath: rawInput
+    });
+    console.log("Native decoding and timestamp verification completed successfully:", decodeResult);
     onProgress(100);
 
-    // Returning original url because the feature is strictly incomplete right now
     const url = typeof videoBlobUrlOrBlob === "string" 
       ? videoBlobUrlOrBlob 
       : URL.createObjectURL(videoBlobUrlOrBlob);
-    return { url, fileId: "incomplete-feature-" + Date.now().toString() };
+
+    return {
+      url,
+      fileId: "native-processed-" + Date.now().toString(),
+      decodedFramesCount: decodeResult.decodedFramesCount,
+      flowComputedCount: decodeResult.flowComputedCount,
+      timestampsVerified: decodeResult.timestampsVerified,
+      sampledTimestampsUs: decodeResult.sampledTimestampsUs,
+      firstTimestampUs: decodeResult.firstTimestampUs,
+      lastTimestampUs: decodeResult.lastTimestampUs,
+      avgFlowMagnitude: decodeResult.avgFlowMagnitude,
+      maxFlowMagnitude: decodeResult.maxFlowMagnitude,
+      flowVisualization: decodeResult.flowVisualization,
+      isFlowCorrect: decodeResult.isFlowCorrect,
+    };
 
   } catch (err: any) {
-    console.error("Plugin failed to receive path", err);
+    console.error("Plugin failed in native processing", err);
     throw err;
   }
 }

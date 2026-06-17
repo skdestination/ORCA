@@ -35,6 +35,10 @@ export type Keyframe = {
     saturation?: number;
     exposure?: number;
     sharpen?: number;
+    sepia?: number;
+    grayscale?: number;
+    hueRotate?: number;
+    invert?: number;
 
     // Masks
     maskPositionX?: number;
@@ -96,6 +100,10 @@ export type Clip = {
   saturation?: number;
   exposure?: number;
   sharpen?: number;
+  sepia?: number;
+  grayscale?: number;
+  hueRotate?: number;
+  invert?: number;
 
   // Masks
   maskType?: "none" | "circle" | "square" | "half";

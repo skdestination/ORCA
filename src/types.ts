@@ -139,6 +139,7 @@ export type Project = {
   duration: string;
   size: string;
   thumbnail: string;
+  thumbnailFileId?: string;
   layers: Layer[];
   clips: Clip[];
 };

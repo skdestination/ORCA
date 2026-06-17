@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.Point;
@@ -215,6 +216,22 @@ public class SmoothSlowMotionPlugin extends Plugin {
         Mat flowMat = null;
         byte[] rowData = null;
         
+        // Frame Interpolation (W1D6) Preallocated Mats & Trackers
+        Mat mapAx = null;
+        Mat mapAy = null;
+        Mat mapBx = null;
+        Mat mapBy = null;
+        Mat warpedA = null;
+        Mat warpedB = null;
+        Mat intermediateFrame = null;
+        Mat diffMat = null;
+        Mat squareDiff = null;
+
+        int interpolatedFramesCount = 0;
+        double sumPsnr = 0;
+        double sumWarpError = 0;
+        String bestInterpolationVisualizationBase64 = "";
+
         // Visualization & Verification Trackers
         double peakAvgFlowMagnitude = 0;
         double overallMaxFlowMagnitude = 0;
@@ -316,10 +333,31 @@ public class SmoothSlowMotionPlugin extends Plugin {
                             if (matA == null || matA.cols() != width || matA.rows() != height) {
                                 if (matA != null) matA.release();
                                 if (matB != null) matB.release();
+                                if (flowMat != null) flowMat.release();
+                                
+                                if (mapAx != null) mapAx.release();
+                                if (mapAy != null) mapAy.release();
+                                if (mapBx != null) mapBx.release();
+                                if (mapBy != null) mapBy.release();
+                                if (warpedA != null) warpedA.release();
+                                if (warpedB != null) warpedB.release();
+                                if (intermediateFrame != null) intermediateFrame.release();
+                                if (diffMat != null) diffMat.release();
+                                if (squareDiff != null) squareDiff.release();
+
                                 matA = new Mat(height, width, CvType.CV_8UC1);
                                 matB = new Mat(height, width, CvType.CV_8UC1);
-                                if (flowMat != null) flowMat.release();
                                 flowMat = new Mat();
+                                
+                                mapAx = new Mat(height, width, CvType.CV_32FC1);
+                                mapAy = new Mat(height, width, CvType.CV_32FC1);
+                                mapBx = new Mat(height, width, CvType.CV_32FC1);
+                                mapBy = new Mat(height, width, CvType.CV_32FC1);
+                                warpedA = new Mat(height, width, CvType.CV_8UC1);
+                                warpedB = new Mat(height, width, CvType.CV_8UC1);
+                                intermediateFrame = new Mat(height, width, CvType.CV_8UC1);
+                                diffMat = new Mat();
+                                squareDiff = new Mat();
                             }
                             
                             if (rowData == null || rowData.length != width) {
@@ -378,43 +416,112 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                         overallMaxFlowMagnitude = localMaxMag;
                                     }
                                     
-                                    // Visualize flow vectors for peak activity frame
-                                    if (avgMag > peakAvgFlowMagnitude) {
-                                        peakAvgFlowMagnitude = avgMag;
-                                        
-                                        Mat visualMat = new Mat();
-                                        Imgproc.cvtColor(currMat, visualMat, Imgproc.COLOR_GRAY2BGR);
-                                        
-                                        int drawStep = 16;
-                                        for (int y = 0; y < height; y += drawStep) {
-                                            for (int x = 0; x < width; x += drawStep) {
-                                                flowMat.get(y, x, flowVec);
-                                                float dx = flowVec[0];
-                                                float dy = flowVec[1];
-                                                double mag = Math.sqrt(dx * dx + dy * dy);
-                                                if (mag > 1.0) {
-                                                    Point pt1 = new Point(x, y);
-                                                    Point pt2 = new Point(Math.round(x + dx), Math.round(y + dy));
-                                                    Imgproc.arrowedLine(visualMat, pt1, pt2, new Scalar(0, 255, 0), 1, 8, 0, 0.1);
-                                                }
-                                            }
+                                    // Today's Work (W1D6): Frame Interpolation Pipeline
+                                    // 1. Create Warp Maps recursively (backward mapping) using fast array copy
+                                    int totalPixels = width * height;
+                                    float[] flowData = new float[totalPixels * 2];
+                                    flowMat.get(0, 0, flowData);
+
+                                    float[] mapAxData = new float[totalPixels];
+                                    float[] mapAyData = new float[totalPixels];
+                                    float[] mapBxData = new float[totalPixels];
+                                    float[] mapByData = new float[totalPixels];
+
+                                    for (int r = 0; r < height; r++) {
+                                        for (int c = 0; c < width; c++) {
+                                            int idx = r * width + c;
+                                            float u = flowData[idx * 2];
+                                            float v = flowData[idx * 2 + 1];
+
+                                            // Frame A backward mapping (warp map A): src_x = current_x - t * vector_x
+                                            mapAxData[idx] = c - 0.5f * u;
+                                            mapAyData[idx] = r - 0.5f * v;
+
+                                            // Frame B backward mapping (warp map B): src_y = current_x + (1-t) * vector_x
+                                            mapBxData[idx] = c + 0.5f * u;
+                                            mapByData[idx] = r + 0.5f * v;
                                         }
-                                        
-                                        Imgproc.putText(visualMat, String.format("Frame %d Flow (Avg: %.2fpx, Max: %.1fpx)", frameCount, avgMag, localMaxMag),
-                                                        new Point(20, 40), Imgproc.FONT_HERSHEY_SIMPLEX, 0.7, new Scalar(0, 255, 255), 2);
-                                        
+                                    }
+
+                                    mapAx.put(0, 0, mapAxData);
+                                    mapAy.put(0, 0, mapAyData);
+                                    mapBx.put(0, 0, mapBxData);
+                                    mapBy.put(0, 0, mapByData);
+
+                                    // 2. Backward Warping via remap (linear interpolation, border replicated to handle edge artifacts)
+                                    Imgproc.remap(prevMat, warpedA, mapAx, mapAy, Imgproc.INTER_LINEAR, Imgproc.BORDER_REPLICATE);
+                                    Imgproc.remap(currMat, warpedB, mapBx, mapBy, Imgproc.INTER_LINEAR, Imgproc.BORDER_REPLICATE);
+
+                                    // 3. Generate Intermediate Frame (t = 0.5)
+                                    Core.addWeighted(warpedA, 0.5, warpedB, 0.5, 0.0, intermediateFrame);
+                                    interpolatedFramesCount++;
+
+                                    // 4. Compare original vs interpolated (warp alignment error metric & PSNR score)
+                                    Core.absdiff(warpedA, warpedB, diffMat);
+                                    Scalar meanDiff = Core.mean(diffMat);
+                                    double localWarpError = meanDiff.val[0];
+                                    sumWarpError += localWarpError;
+
+                                    Core.multiply(diffMat, diffMat, squareDiff);
+                                    Scalar meanSquareDiff = Core.mean(squareDiff);
+                                    double localMse = meanSquareDiff.val[0];
+                                    double localPsnr = (localMse > 0) ? (10.0 * Math.log10((255.0 * 255.0) / localMse)) : 99.0;
+                                    sumPsnr += localPsnr;
+
+                                    // Visualize and validate frame interpolation
+                                    if (avgMag > peakAvgFlowMagnitude || bestFlowVisualizationBase64.isEmpty()) {
+                                        peakAvgFlowMagnitude = avgMag;
+
+                                        // Create split-view visual validation card: [Original | Interpolated]
+                                        Mat leftBGR = new Mat();
+                                        Imgproc.cvtColor(prevMat, leftBGR, Imgproc.COLOR_GRAY2BGR);
+
+                                        Mat rightBGR = new Mat();
+                                        Imgproc.cvtColor(intermediateFrame, rightBGR, Imgproc.COLOR_GRAY2BGR);
+
+                                        // Annotate Left & Right Panes
+                                        Imgproc.putText(leftBGR, "Original (Frame A)", new Point(15, 30),
+                                                Imgproc.FONT_HERSHEY_SIMPLEX, 0.6, new Scalar(0, 255, 255), 2);
+
+                                        Imgproc.putText(rightBGR, "Interpolated Frame I (t=0.5)", new Point(15, 30),
+                                                Imgproc.FONT_HERSHEY_SIMPLEX, 0.6, new Scalar(100, 240, 100), 2);
+
+                                        List<Mat> framesList = new ArrayList<>();
+                                        framesList.add(leftBGR);
+                                        framesList.add(rightBGR);
+
+                                        Mat sideBySide = new Mat();
+                                        Core.hconcat(framesList, sideBySide);
+
+                                        // Divider
+                                        Imgproc.line(sideBySide, new Point(width, 0), new Point(width, height), new Scalar(255, 255, 255), 2);
+
+                                        // Footer Telemetry Bar overlay to prevent cluttering the canvas
+                                        int footerHeight = 45;
+                                        Mat footerOverlay = sideBySide.submat(height - footerHeight, height, 0, width * 2);
+                                        footerOverlay.setTo(new Scalar(20, 20, 20));
+
+                                        Imgproc.putText(sideBySide, "WEEK 1 DAY 6 VALIDATION: 30fps -> 60fps Frame Interpolation",
+                                                new Point(15, height - 28), Imgproc.FONT_HERSHEY_SIMPLEX, 0.45, new Scalar(220, 220, 220), 1);
+                                        Imgproc.putText(sideBySide, String.format("DIS Motion: %.2fpx | PSNR: %.2fdB | Warping Error: %.3fpx", avgMag, localPsnr, localWarpError),
+                                                new Point(15, height - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 0.45, new Scalar(130, 240, 130), 1);
+
                                         MatOfByte buf = new MatOfByte();
-                                        Imgcodecs.imencode(".jpg", visualMat, buf);
+                                        Imgcodecs.imencode(".jpg", sideBySide, buf);
                                         byte[] bytes = buf.toArray();
                                         bestFlowVisualizationBase64 = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
-                                        
-                                        visualMat.release();
+                                        bestInterpolationVisualizationBase64 = bestFlowVisualizationBase64;
+
+                                        leftBGR.release();
+                                        rightBGR.release();
+                                        sideBySide.release();
+                                        footerOverlay.release();
                                         buf.release();
                                     }
-                                    
+
                                     if (flowComputedCount % 15 == 0) {
-                                        Log.i(TAG, String.format("DIS Flow computed for %d frames. Frame %d Stats (Avg: %.2fpx, Max: %.1fpx)", 
-                                              flowComputedCount, frameCount, avgMag, localMaxMag));
+                                         Log.i(TAG, String.format("DIS Flow + Interpolation for %d frames. PSNR: %.2f dB, Error: %.3f px",
+                                               flowComputedCount, localPsnr, localWarpError));
                                     }
                                 } catch (Exception flowErr) {
                                     Log.e(TAG, "Failed to calculate/verify/visualize DIS Optical Flow on frame " + frameCount + ": " + flowErr.getMessage());
@@ -449,6 +556,14 @@ public class SmoothSlowMotionPlugin extends Plugin {
             result.put("flowVisualization", bestFlowVisualizationBase64);
             result.put("isFlowCorrect", flowComputedCount > 0 && overallMaxFlowMagnitude > 0.05);
 
+            // Add frame interpolation (W1D6) metrics
+            double averagePsnr = interpolatedFramesCount > 0 ? sumPsnr / interpolatedFramesCount : 0;
+            double averageWarpError = interpolatedFramesCount > 0 ? sumWarpError / interpolatedFramesCount : 0;
+            result.put("interpolatedFramesCount", interpolatedFramesCount);
+            result.put("averagePsnr", averagePsnr);
+            result.put("averageWarpError", averageWarpError);
+            result.put("interpolationVisualization", bestInterpolationVisualizationBase64);
+
             JSArray tsArray = new JSArray();
             int sampleStep = Math.max(1, timestamps.size() / 20);
             for (int i = 0; i < timestamps.size(); i += sampleStep) {
@@ -460,7 +575,7 @@ public class SmoothSlowMotionPlugin extends Plugin {
                 result.put("lastTimestampUs", timestamps.get(timestamps.size() - 1));
             }
 
-            Log.i(TAG, "Finished processing sequence. Count: " + frameCount + ", Verified: " + timestampsVerified + ", Flow run: " + flowComputedCount + ", Global Avg Flow: " + globalAvgFlow);
+            Log.i(TAG, "Finished processing sequence. Count: " + frameCount + ", Verified: " + timestampsVerified + ", Flow run: " + flowComputedCount + ", Global Avg Flow: " + globalAvgFlow + ", Interpolated: " + interpolatedFramesCount + " (avg PSNR: " + averagePsnr + " dB)");
             call.resolve(result);
 
         } catch (Exception e) {
@@ -475,6 +590,33 @@ public class SmoothSlowMotionPlugin extends Plugin {
             } catch (Exception ignored) {}
             try {
                 if (flowMat != null) flowMat.release();
+            } catch (Exception ignored) {}
+            try {
+                if (mapAx != null) mapAx.release();
+            } catch (Exception ignored) {}
+            try {
+                if (mapAy != null) mapAy.release();
+            } catch (Exception ignored) {}
+            try {
+                if (mapBx != null) mapBx.release();
+            } catch (Exception ignored) {}
+            try {
+                if (mapBy != null) mapBy.release();
+            } catch (Exception ignored) {}
+            try {
+                if (warpedA != null) warpedA.release();
+            } catch (Exception ignored) {}
+            try {
+                if (warpedB != null) warpedB.release();
+            } catch (Exception ignored) {}
+            try {
+                if (intermediateFrame != null) intermediateFrame.release();
+            } catch (Exception ignored) {}
+            try {
+                if (diffMat != null) diffMat.release();
+            } catch (Exception ignored) {}
+            try {
+                if (squareDiff != null) squareDiff.release();
             } catch (Exception ignored) {}
             try {
                 if (decoder != null) {

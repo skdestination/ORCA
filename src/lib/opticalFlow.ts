@@ -29,6 +29,10 @@ export interface SmoothSlowMotionPlugin {
     maxFlowMagnitude?: number;
     flowVisualization?: string;
     isFlowCorrect?: boolean;
+    interpolatedFramesCount?: number;
+    averagePsnr?: number;
+    averageWarpError?: number;
+    interpolationVisualization?: string;
   }>;
 }
 
@@ -135,6 +139,10 @@ export async function processSmoothSlowMoBrowser(
   maxFlowMagnitude?: number;
   flowVisualization?: string;
   isFlowCorrect?: boolean;
+  interpolatedFramesCount?: number;
+  averagePsnr?: number;
+  averageWarpError?: number;
+  interpolationVisualization?: string;
 }> {
 
   if (!Capacitor.isNativePlatform()) {
@@ -204,6 +212,10 @@ export async function processSmoothSlowMoBrowser(
       maxFlowMagnitude: decodeResult.maxFlowMagnitude,
       flowVisualization: decodeResult.flowVisualization,
       isFlowCorrect: decodeResult.isFlowCorrect,
+      interpolatedFramesCount: decodeResult.interpolatedFramesCount,
+      averagePsnr: decodeResult.averagePsnr,
+      averageWarpError: decodeResult.averageWarpError,
+      interpolationVisualization: decodeResult.interpolationVisualization,
     };
 
   } catch (err: any) {

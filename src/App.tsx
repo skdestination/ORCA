@@ -433,6 +433,39 @@ function CropControlOverlay({ clip, updateClipsProperties }: CropControlOverlayP
   );
 }
 
+import { getFile } from "./lib/db";
+
+function ProjectCoverImage({ p }: { p: Project }) {
+  const [dbSrc, setDbSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    if (p.thumbnailFileId) {
+      getFile(p.thumbnailFileId).then(blob => {
+        if (blob) {
+          objectUrl = URL.createObjectURL(blob);
+          setDbSrc(objectUrl);
+        }
+      }).catch(console.error);
+    }
+    
+    return () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [p.thumbnailFileId]);
+
+  return (
+    <img
+      src={dbSrc || p.thumbnail || undefined}
+      alt=""
+      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+      referrerPolicy="no-referrer"
+    />
+  );
+}
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -744,6 +777,10 @@ export default function App() {
     maxFlowMagnitude?: number;
     flowVisualization?: string;
     isFlowCorrect?: boolean;
+    interpolatedFramesCount?: number;
+    averagePsnr?: number;
+    averageWarpError?: number;
+    interpolationVisualization?: string;
   } | null>(null);
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const selectedClipId = selectedClipIds.length === 1 ? selectedClipIds[0] : null;
@@ -1746,7 +1783,12 @@ export default function App() {
             }
 
             const newDuration = formatTime(maxDuration);
-            if (p.ratio !== currentProjectRatio || p.layers !== layers || p.clips !== clips || p.duration !== newDuration) {
+            
+            // find thumbnail
+            const firstVisualClip = clips.find(c => (c.type === "video" || c.type === "image") && c.dbFileId);
+            const newThumbnailFileId = firstVisualClip?.dbFileId || p.thumbnailFileId;
+
+            if (p.ratio !== currentProjectRatio || p.layers !== layers || p.clips !== clips || p.duration !== newDuration || p.thumbnailFileId !== newThumbnailFileId) {
               hasChanges = true;
               return {
                 ...p,
@@ -1755,6 +1797,7 @@ export default function App() {
                 clips,
                 updatedAt: "Just now",
                 duration: newDuration,
+                thumbnailFileId: newThumbnailFileId,
               };
             }
             return p;
@@ -1824,15 +1867,16 @@ export default function App() {
     const newLayerId = Math.random().toString(36).substring(2, 9);
 
     setLayers((prev) => {
-      const minOrder =
-        prev.length > 0 ? Math.min(...prev.map((l) => l.order)) : 0;
+      const maxOrder =
+        prev.length > 0 ? Math.max(...prev.map((l) => l.order)) : 0;
       return [
         ...prev,
         {
           id: newLayerId,
-          order: minOrder - 1,
+          order: maxOrder + 1,
           isMuted: false,
           isHidden: false,
+          name: "Text Layer"
         },
       ];
     });
@@ -2122,7 +2166,11 @@ export default function App() {
         avgFlowMagnitude,
         maxFlowMagnitude,
         flowVisualization,
-        isFlowCorrect
+        isFlowCorrect,
+        interpolatedFramesCount,
+        averagePsnr,
+        averageWarpError,
+        interpolationVisualization
       } = decodeResult;
 
       setOpticalFlowDiagnostics({
@@ -2133,7 +2181,11 @@ export default function App() {
         avgFlowMagnitude,
         maxFlowMagnitude,
         flowVisualization,
-        isFlowCorrect
+        isFlowCorrect,
+        interpolatedFramesCount,
+        averagePsnr,
+        averageWarpError,
+        interpolationVisualization
       });
 
       if (decodedFramesCount !== undefined) {
@@ -3427,13 +3479,8 @@ const renderHome = () => {
                 </div>
 
                 {/* Right Image/Artwork Side */}
-                <div className="w-[45%] h-full shrink-0 relative overflow-hidden z-10">
-                  <img
-                    src={p.thumbnail || undefined}
-                    alt=""
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
-                    referrerPolicy="no-referrer"
-                  />
+                <div className="w-[45%] h-full shrink-0 relative overflow-hidden z-10 bg-zinc-900/50">
+                  <ProjectCoverImage p={p} />
                   {/* Frosted vignette masking division */}
                   <div className="absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-zinc-950/40 via-zinc-950/20 to-transparent pointer-events-none" />
 
@@ -3500,12 +3547,12 @@ const renderHome = () => {
       </div>
 
       {/* Persistent Rounded Floating Footer Row */}
-      <div className="absolute bottom-9 left-0 right-0 flex justify-center items-center px-6 z-40 pointer-events-none">
+      <div className="absolute bottom-[50px] left-0 right-0 flex justify-center items-center px-6 z-40 pointer-events-none">
         <div className="flex items-center gap-3 w-full max-w-[340px] pointer-events-auto">
           {/* New Project Button */}
           <button
             onClick={() => setIsCreatingProject(true)}
-            className="relative flex-1 h-14 rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
+            className="relative flex-1 h-[50px] rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
           >
             {/* Glossy shine */}
             <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.01] to-white/[0.04] pointer-events-none" />
@@ -3518,7 +3565,7 @@ const renderHome = () => {
           {/* Settings Button */}
           <button
             onClick={() => setCurrentScreen("settings")}
-            className="relative w-14 h-14 rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
+            className="relative w-[50px] h-[50px] rounded-full bg-zinc-950/40 hover:bg-zinc-950/55 backdrop-blur-xl border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 active:scale-[0.97] transition-all duration-300 shadow-[0_12px_36px_rgba(0,0,0,0.65)] cursor-pointer overflow-hidden group"
           >
             {/* Glossy shine */}
             <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/[0.01] to-white/[0.04] pointer-events-none" />
@@ -3537,19 +3584,46 @@ const renderHome = () => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center"
+            className="fixed inset-0 z-50 bg-[#040404] flex flex-col items-center justify-center overflow-hidden"
           >
+            {/* Dotted Grid Background */}
+            <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-0">
+               <div 
+                 className="w-full max-w-[800px] h-full max-h-[800px] opacity-[0.2]"
+                 style={{
+                   backgroundImage: `radial-gradient(circle at center, rgba(255,255,255,0.8) 1px, transparent 1px)`,
+                   backgroundSize: `28px 28px`,
+                   WebkitMaskImage: `radial-gradient(ellipse 50% 50% at center, black 10%, transparent 60%)`,
+                   maskImage: `radial-gradient(ellipse 50% 50% at center, black 10%, transparent 60%)`
+                 }}
+               />
+            </div>
+
+            {/* Title */}
+            <motion.div 
+               initial={{ opacity: 0, y: -10 }}
+               animate={{ opacity: 1, y: 0 }}
+               transition={{ delay: 0.2, duration: 0.8 }}
+               className="absolute top-[18%] left-0 right-0 flex items-center justify-center px-8 pointer-events-none z-10"
+            >
+              <div className="w-[60px] sm:w-[100px] h-[1px] bg-gradient-to-r from-transparent to-zinc-700" />
+              <span className="text-[10px] font-semibold tracking-[0.3em] text-zinc-500 px-6 uppercase whitespace-nowrap">
+                Choose Format
+              </span>
+              <div className="w-[60px] sm:w-[100px] h-[1px] bg-gradient-to-l from-transparent to-zinc-700" />
+            </motion.div>
+
             <motion.button
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="absolute top-8 right-8 w-12 h-12 rounded-full bg-zinc-800/80 backdrop-blur hover:bg-zinc-700 flex items-center justify-center text-white transition-colors z-50"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="absolute top-8 right-8 w-12 h-12 rounded-full bg-transparent hover:bg-zinc-800/30 flex items-center justify-center text-zinc-500 hover:text-white transition-colors z-50"
               onClick={() => setIsCreatingProject(false)}
             >
-              <X size={24} />
+              <X size={24} strokeWidth={1.5} />
             </motion.button>
 
             <div 
-              className="flex flex-nowrap items-center overflow-x-auto w-full pb-20 pt-10 scrollbar-hide snap-x snap-mandatory"
+              className="relative z-20 flex flex-nowrap items-center overflow-x-auto w-full pb-10 pt-16 scrollbar-hide snap-x snap-mandatory"
               onScroll={(e) => {
                 const container = e.currentTarget;
                 const containerCenter = container.getBoundingClientRect().left + container.clientWidth / 2;
@@ -3578,10 +3652,10 @@ const renderHome = () => {
               }}
             >
               {[
-                { ratio: "9:16", baseW: 180, baseH: 320, label: "Reels, TikTok" },
-                { ratio: "16:9", baseW: 320, baseH: 180, label: "YouTube" },
-                { ratio: "1:1", baseW: 240, baseH: 240, label: "Instagram" },
-                { ratio: "custom", baseW: 240, baseH: 240, label: "Custom" },
+                { ratio: "9:16", baseW: 160, baseH: 340, label: "PORTRAIT" },
+                { ratio: "16:9", baseW: 340, baseH: 160, label: "LANDSCAPE" },
+                { ratio: "1:1", baseW: 240, baseH: 240, label: "SQUARE" },
+                { ratio: "custom", baseW: 240, baseH: 120, label: "CUSTOM" },
               ].map((r, i) => {
                 const isFocused = focusedRatio === r.ratio;
                 const scale = isFocused ? 1 : 0.85;
@@ -3597,12 +3671,43 @@ const renderHome = () => {
                     >
                       <motion.div
                         animate={{ width: r.baseW * scale, height: r.baseH * scale }}
-                        transition={{ type: "spring", bounce: 0.4 }}
-                        className={`border-[4px] rounded-[32px] flex items-center justify-center bg-transparent transition-colors duration-300 ${isFocused ? "border-white" : "border-zinc-700"}`}
+                        transition={{ type: "spring", bounce: 0.3 }}
+                        className={`relative rounded-[36px] flex items-center justify-center transition-all duration-500 ${isFocused ? "p-[1.5px]" : "p-[1px]"}`}
                       >
-                         <span className={`font-bold text-3xl transition-colors ${isFocused ? "text-white" : "text-zinc-500"}`}>
-                           {r.ratio === "custom" ? "Custom" : r.ratio}
-                         </span>
+                         {/* Gradient Border for Focused */}
+                         <div 
+                            className={`absolute inset-0 rounded-[36px] pointer-events-none transition-opacity duration-700 ${isFocused ? "opacity-100" : "opacity-0"}`} 
+                            style={{ background: 'linear-gradient(145deg, rgba(167, 139, 250, 0.8) 0%, rgba(255, 255, 255, 0.1) 40%, rgba(255, 255, 255, 0.1) 60%, rgba(251, 146, 60, 0.7) 100%)' }} 
+                         />
+                         
+                         {/* Subtle Border for Unfocused */}
+                         <div className={`absolute inset-0 rounded-[36px] pointer-events-none transition-opacity duration-500 border border-white/10 ${!isFocused ? "opacity-100" : "opacity-0"}`} />
+
+                         <div className="absolute inset-[1.5px] rounded-[34.5px] bg-[#040404] z-10 pointer-events-none" />
+                         
+                         <div className="relative z-20 flex flex-col items-center justify-center gap-2">
+                           {r.ratio === "custom" && isFocused ? (
+                             <div className="flex items-center gap-3 bg-zinc-900/40 rounded-2xl p-2 border border-white/5" onClick={e => e.stopPropagation()}>
+                               <input type="number" placeholder="W" className="bg-transparent w-16 text-center text-lg text-white outline-none font-medium" value={customRatioW} onChange={(e) => setCustomRatioW(e.target.value)} />
+                               <div className="w-[1px] h-6 bg-zinc-700"></div>
+                               <input type="number" placeholder="H" className="bg-transparent w-16 text-center text-lg text-white outline-none font-medium" value={customRatioH} onChange={(e) => setCustomRatioH(e.target.value)} />
+                             </div>
+                           ) : (
+                             <span className={`font-medium text-[28px] transition-colors duration-500 tracking-wide ${isFocused ? "text-[#f8f8f8]" : "text-zinc-600"}`}>
+                               {r.ratio === "custom" ? "Custom" : r.ratio}
+                             </span>
+                           )}
+                           
+                           {isFocused ? (
+                             <span className="text-[9px] font-medium tracking-[0.25em] text-zinc-400 uppercase mt-1">
+                               {r.label}
+                             </span>
+                           ) : (
+                             <span className="text-[9px] font-medium tracking-[0.25em] text-zinc-700 uppercase mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                               {r.label}
+                             </span>
+                           )}
+                         </div>
                       </motion.div>
                     </motion.div>
                   </div>
@@ -3610,32 +3715,26 @@ const renderHome = () => {
               })}
             </div>
 
-            <div className="absolute bottom-[50px] left-0 right-0 flex flex-col items-center gap-6 pointer-events-none">
-              {focusedRatio === "custom" ? (
-                <div className="flex items-center gap-3 bg-zinc-900/80 backdrop-blur-md rounded-2xl p-2 border border-zinc-700 pointer-events-auto">
-                   <input type="number" placeholder="H" className="bg-transparent w-20 text-center text-xl text-white outline-none font-bold" value={customRatioH} onChange={(e) => setCustomRatioH(e.target.value)} />
-                   <div className="w-[2px] h-6 bg-zinc-600"></div>
-                   <input type="number" placeholder="W" className="bg-transparent w-20 text-center text-xl text-white outline-none font-bold" value={customRatioW} onChange={(e) => setCustomRatioW(e.target.value)} />
-                </div>
-              ) : (
-                <span className="text-sm font-semibold text-white/50 tracking-widest uppercase">
-                  {[
-                    { ratio: "9:16", label: "Reels, TikTok" },
-                    { ratio: "16:9", label: "YouTube" },
-                    { ratio: "1:1", label: "Instagram" },
-                  ].find(x => x.ratio === focusedRatio)?.label}
-                </span>
-              )}
-              
+            <motion.div 
+               initial={{ opacity: 0, y: 10 }}
+               animate={{ opacity: 1, y: 0 }}
+               transition={{ delay: 0.3, duration: 0.8 }}
+               className="absolute bottom-[10%] left-0 right-0 flex flex-col items-center pointer-events-none z-30"
+            >
               <button 
-                className="pointer-events-auto w-[150px] h-11 border-2 border-white rounded-full flex items-center justify-center font-bold text-white hover:bg-white hover:text-black transition-colors text-sm"
+                className="pointer-events-auto relative w-[240px] h-[52px] group flex items-center justify-center rounded-[26px] transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
                 onClick={() => {
                    handleCreateProject(focusedRatio === "custom" ? `${customRatioW}:${customRatioH}` : focusedRatio);
                 }}
               >
-                 Create
+                 <div className="absolute inset-0 rounded-[26px] p-[1px] opacity-60 group-hover:opacity-100 transition-opacity duration-300"
+                      style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0.6) 100%)' }} />
+                 <div className="absolute inset-[1px] rounded-[25px] bg-[#040404]" />
+                 <span className="relative z-10 font-bold tracking-[0.35em] text-[#f8f8f8] text-[11px] uppercase ml-1 opacity-90 group-hover:opacity-100 drop-shadow-sm">
+                   Create
+                 </span>
               </button>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -4254,6 +4353,17 @@ const renderEditor = () => (
                                   ...(activeClip.textAnimation === "Bounce" ? { 
                                       opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1),
                                       transform: `${transformStyle.transform} translateY(${-(Math.sin(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1) * Math.PI) * 20 * (1-Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 1)))}px)`
+                                  } : {}),
+                                  ...(activeClip.textAnimation === "Pop" ? { 
+                                      opacity: (activeClip.opacity ?? 1) * Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 0.4),
+                                      transform: `${transformStyle.transform} scale(${Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 0.4) <= 1 ? 0.5 + Math.sin(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 0.4) * (Math.PI / 2)) * 0.5 + Math.sin(Math.min(1, (currentTime - activeClipRaw.leftSeconds) / 0.4) * Math.PI) * 0.2 : 1})`
+                                  } : {}),
+                                  ...(activeClip.textAnimation === "Glitch" && (currentTime - activeClipRaw.leftSeconds) < 1.5 ? {
+                                      transform: `${transformStyle.transform} translate(${Math.random() > 0.8 ? (Math.random() - 0.5) * 20 : 0}px, ${Math.random() > 0.8 ? (Math.random() - 0.5) * 20 : 0}px)`,
+                                      filter: Math.random() > 0.8 ? `hue-rotate(90deg) invert(100%)` : `blur(${activeClip.blur || 0}px)`
+                                  } : {}),
+                                  ...(activeClip.textAnimation === "Wave" ? {
+                                      transform: `${transformStyle.transform} translateY(${Math.sin((currentTime - activeClipRaw.leftSeconds) * 5) * 15}px)`
                                   } : {})
                                 }}
                               >
@@ -4662,7 +4772,7 @@ const renderEditor = () => (
 
           {/* Integrated Multi-State Information Popups in same Pill shape design */}
           {!(multiSelectActive || (selectedClipId && clips.find(c => c.id === selectedClipId)?.type === "text") || !!activeExpandedMenu) && (
-            <div className="absolute left-1/2 -translate-x-1/2 top-4 flex items-center justify-center pointer-events-none z-[150]">
+            <div className="absolute left-1/2 -translate-x-1/2 -top-[28px] sm:-top-[36px] flex items-center justify-center pointer-events-none z-[150]">
               <AnimatePresence>
                 {(pillPopup || toastMessage) && (() => {
                   const message = pillPopup ? pillPopup.message : toastMessage;
@@ -4742,52 +4852,62 @@ const renderEditor = () => (
               </div>
 
               <div id="layers-sidebar" className="flex flex-col flex-1">
-                {visibleLayers.map((layer) => (
-                  <div
-                    key={layer.id}
-                    className={`${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} flex flex-col items-center justify-center shrink-0 border-b group py-1 relative transition-all transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/20 border-indigo-500/50 scale-[1.02] z-50 shadow-xl" : "bg-zinc-800/20 border-white/5 backdrop-blur-sm z-10"}`}
-                  >
-                    {layer.isLocked && (
-                      <div className="absolute top-0.5 right-1 pointer-events-none" title="Layer Locked">
-                        <Lock size={isCompactMode ? 7 : 9} className="text-yellow-500/85 animate-pulse" />
-                      </div>
-                    )}
-                    <div className="flex gap-0.5 sm:gap-1 items-center">
-                      <button
-                        onClick={() => toggleLayerMute(layer.id)}
-                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full ${layer.isMuted ? "text-red-400 bg-red-400/10" : "text-zinc-400 hover:text-white"}`}
-                      >
-                        {layer.isMuted ? (
-                          <VolumeX size={isCompactMode ? 10 : 13} />
-                        ) : (
-                          <Volume2 size={isCompactMode ? 10 : 13} />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => toggleLayerVisibility(layer.id)}
-                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full ${layer.isHidden ? "text-blue-400 bg-blue-400/10" : "text-zinc-400 hover:text-white"}`}
-                      >
-                        {layer.isHidden ? (
-                          <EyeOff size={isCompactMode ? 10 : 13} />
-                        ) : (
-                          <Eye size={10} sm:size={13} />
-                        )}
-                      </button>
-                      <div
-                        onPointerDown={(e) =>
-                          handleLayerPointerDown(e, layer.id)
-                        }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!hasDraggedLayerRef.current) {
-                            setLayerMenuOpenId(layerMenuOpenId === layer.id ? null : layer.id);
+                {visibleLayers.map((layer, index) => {
+                  const trackIndex = visibleLayers.length - index;
+                  return (
+                    <div
+                      key={layer.id}
+                      className={`${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} flex flex-col items-center justify-center shrink-0 border-b group py-0.5 relative transition-all duration-200 transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/15 border-indigo-500/40 scale-[1.02] z-50 shadow-[0_8px_20px_rgba(0,0,0,0.6)]" : "bg-[#0d0d0f]/60 hover:bg-[#121214]/80 border-white/[0.03] backdrop-blur-sm z-10"}`}
+                    >
+                      {/* Cosmetic Track Badge Indicator */}
+                      <span className="absolute top-1 left-2 pointer-events-none font-mono text-[7px] text-zinc-500/80 font-bold uppercase tracking-wider scale-90 sm:scale-100 origin-left">
+                        T{trackIndex}
+                      </span>
+
+                      {layer.isLocked && (
+                        <div className="absolute top-1 right-2 pointer-events-none" title="Layer Locked">
+                          <Lock size={isCompactMode ? 6 : 8} className="text-amber-500/90 animate-pulse" />
+                        </div>
+                      )}
+                      <div className="flex gap-1 sm:gap-1.5 items-center justify-center w-full px-1">
+                        <button
+                          onClick={() => toggleLayerMute(layer.id)}
+                          className={`${isCompactMode ? "w-[14px] h-[14px]" : "w-5 h-5 sm:w-6 sm:h-6"} flex items-center justify-center rounded-md transition-all ${layer.isMuted ? "text-rose-400 bg-rose-500/15 border border-rose-500/25 shadow-[0_0_8px_rgba(239,68,68,0.25)]" : "text-zinc-500 hover:text-zinc-200 hover:bg-white/5 border border-transparent"}`}
+                          title={layer.isMuted ? "Unmute Track" : "Mute Track"}
+                        >
+                          {layer.isMuted ? (
+                            <VolumeX size={isCompactMode ? 9 : 11} className="stroke-[1.8]" />
+                          ) : (
+                            <Volume2 size={isCompactMode ? 9 : 11} className="stroke-[1.8]" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => toggleLayerVisibility(layer.id)}
+                          className={`${isCompactMode ? "w-[14px] h-[14px]" : "w-5 h-5 sm:w-6 sm:h-6"} flex items-center justify-center rounded-md transition-all ${layer.isHidden ? "text-sky-400 bg-sky-500/15 border border-sky-500/25 shadow-[0_0_8px_rgba(56,189,248,0.25)]" : "text-zinc-500 hover:text-zinc-200 hover:bg-white/5 border border-transparent"}`}
+                          title={layer.isHidden ? "Show Track" : "Hide Track"}
+                        >
+                          {layer.isHidden ? (
+                            <EyeOff size={isCompactMode ? 9 : 11} className="stroke-[1.8]" />
+                          ) : (
+                            <Eye size={isCompactMode ? 9 : 11} className="stroke-[1.8]" />
+                          )}
+                        </button>
+                        <div
+                          onPointerDown={(e) =>
+                            handleLayerPointerDown(e, layer.id)
                           }
-                        }}
-                        className={`${isCompactMode ? "w-[15px] h-[15px]" : "w-6 h-6 sm:w-7 sm:h-7"} flex items-center justify-center rounded-full cursor-grab touch-none transition-colors ${layerMenuOpenId === layer.id || draggingLayerId === layer.id ? "bg-zinc-700 text-white" : "text-zinc-400 hover:text-white hover:bg-zinc-800"}`}
-                      >
-                        <MoreVertical size={isCompactMode ? 10 : 13} />
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!hasDraggedLayerRef.current) {
+                              setLayerMenuOpenId(layerMenuOpenId === layer.id ? null : layer.id);
+                            }
+                          }}
+                          className={`${isCompactMode ? "w-[14px] h-[14px]" : "w-5 h-5 sm:w-6 sm:h-6"} flex items-center justify-center rounded-md cursor-grab touch-none transition-all ${layerMenuOpenId === layer.id || draggingLayerId === layer.id ? "bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 shadow-[0_0_8px_rgba(99,102,241,0.2)]" : "text-zinc-500 hover:text-zinc-200 hover:bg-white/5 border border-transparent"}`}
+                          title="Track Options"
+                        >
+                          <MoreVertical size={isCompactMode ? 9 : 11} className="stroke-[1.8]" />
+                        </div>
                       </div>
-                    </div>
 
                     {/* Layer Options Menu */}
                     <AnimatePresence>
@@ -4897,9 +5017,10 @@ const renderEditor = () => (
                       )}
                     </AnimatePresence>
                   </div>
-                ))}
+                  );
+                })}
                 <div
-                  className={`${isCompactMode ? "h-[28px] sm:h-[32px]" : "h-[44px] sm:h-[50px]"} flex items-center justify-center shrink-0 border-b border-white/5 bg-zinc-800/10 hover:bg-zinc-800/30 cursor-pointer transition-all`}
+                  className={`${isCompactMode ? "h-[28px] sm:h-[32px]" : "h-[40px] sm:h-[46px]"} flex items-center justify-center shrink-0 border-b border-dashed border-white/[0.08] bg-[#0c0c0e]/30 hover:bg-[#111114]/50 cursor-pointer transition-all duration-150 relative group`}
                   onClick={() => {
                     setLayers((prev) => {
                       const maxOrder = prev.reduce(
@@ -4918,33 +5039,36 @@ const renderEditor = () => (
                       ];
                     });
                   }}
+                  title="Add New track"
                 >
                   <PlusIcon
-                    size={16}
-                    className="text-zinc-500 hover:text-white"
+                    size={14}
+                    className="text-zinc-550 group-hover:text-indigo-400 group-hover:scale-110 transition-all duration-200"
                   />
                 </div>
               </div>
             </div>
 
-            {/* STATIONARY PLAYHEAD (Now perfectly aligned) */}
+            {/* STATIONARY PLAYHEAD (Now perfectly aligned with upgraded pro glow) */}
             {layers.length > 0 && (
               <div
                 className="sticky top-0 left-[100px] pointer-events-none z-[60] w-0 h-0"
                 style={{ transform: `translateX(${playheadX}px)` }}
               >
-                <div className="absolute top-0 -translate-x-[1px] flex flex-col items-center">
+                <div className="absolute top-0 -translate-x-1/2 flex flex-col items-center">
+                  {/* Upgraded micro-precision glossy neon playhead cap */}
                   <div
-                    className="w-[14px] h-[15px] bg-red-500 relative flex items-end justify-center"
+                    className="w-[12px] h-[14px] bg-gradient-to-b from-[#ff4d4d] to-[#e61919] relative flex items-end justify-center shadow-[0_2px_6px_rgba(230,25,25,0.4)]"
                     style={{
                       clipPath:
                         "polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%)",
                     }}
                   >
-                    <div className="w-[4px] h-[4px] bg-red-950/30 rounded-full mb-[5px]"></div>
+                    <div className="w-[3px] h-[3px] bg-white rounded-full mb-[4px] shadow-[0_0_4px_rgba(255,255,255,0.8)] animate-pulse"></div>
                   </div>
                 </div>
-                <div className="absolute top-0 left-0 transform -translate-x-[1px] w-[1.5px] bg-red-500 h-[100vh] shadow-[0_0_8px_rgba(239,68,68,0.8)]"></div>
+                {/* Micro stem with beautiful fluorescent neon light glow */}
+                <div className="absolute top-0 left-0 transform -translate-x-[0.75px] w-[1.5px] bg-gradient-to-b from-[#ff3333] via-[#ff4a4a] to-[#ef4444]/60 h-[100vh] shadow-[0_0_10px_rgba(239,68,68,0.7),_0_0_4px_rgba(239,68,68,0.5)]"></div>
               </div>
             )}
 
@@ -4954,7 +5078,7 @@ const renderEditor = () => (
               {layers.length > 0 && (
                 <div
                   id="ruler-container"
-                  className="sticky top-0 z-[50] h-[20px] bg-[#171719] border-b border-white/5 cursor-pointer hover:bg-[#222] transition-colors"
+                  className="sticky top-0 z-[50] h-[22px] bg-[#0c0c0e]/95 backdrop-blur-md border-b border-white/[0.05] cursor-pointer hover:bg-[#121216] transition-colors duration-150"
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     setIsPlaying(false);
@@ -5037,12 +5161,12 @@ const renderEditor = () => (
                         return (
                           <div
                             key={i}
-                            className="absolute h-full border-l border-zinc-600/80 pointer-events-none"
+                            className="absolute h-full border-l border-zinc-700/60 pointer-events-none"
                             style={{ left: `${i * pixelsPerSecond}px` }}
                           >
                             {showText && (
                               <span
-                                className="absolute -left-[4px] top-[2px] text-[9px] text-zinc-300 font-medium font-mono pl-1 bg-transparent px-1 rounded line-height-none leading-none"
+                                className="absolute -left-[4px] top-[3px] text-[8px] sm:text-[8.5px] text-zinc-400 hover:text-zinc-200 font-semibold font-mono tracking-wider pl-1 bg-transparent px-1 rounded line-height-none leading-none select-none transition-colors"
                                 style={{ textShadow: "none" }}
                               >
                                 {i < 60 ? i.toString() : `${Math.floor(i/60)}:${(i%60).toString().padStart(2,"0")}`}
@@ -5054,10 +5178,10 @@ const renderEditor = () => (
                               return (
                                 <div
                                   key={subIndex}
-                                  className={`absolute bottom-0 w-px ${isHalf ? "bg-zinc-500" : "bg-zinc-700/80"} pointer-events-none`}
+                                  className={`absolute bottom-0 w-[1px] ${isHalf ? "bg-zinc-650" : "bg-zinc-800/80"} pointer-events-none`}
                                   style={{
                                     left: `${(subIndex + 1) * (pixelsPerSecond / 10)}px`,
-                                    height: isHalf ? "10px" : "5px",
+                                    height: isHalf ? "8px" : "4px",
                                   }}
                                 />
                               );
@@ -5262,16 +5386,16 @@ const renderEditor = () => (
                         <div
                           key={layer.id}
                           data-layer-id={layer.id}
-                          className={`relative ${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} w-full border-b flex items-center group track-space transition-[background,transform,border,shadow] transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/10 border-indigo-500/30 scale-[1.02] shadow-xl z-50 rounded-lg overflow-hidden" : "border-white/5 z-0"}`}
+                          className={`relative ${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} w-full border-b flex items-center group track-space transition-[background,transform,border,shadow] transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/5 border-indigo-500/25 scale-[1.01] shadow-[0_4px_16px_rgba(0,0,0,0.5)] z-50 rounded-lg overflow-hidden" : "border-white/[0.03] hover:bg-white/[0.01] z-0"}`}
                         >
-                          {/* Grid Background */}
+                          {/* Grid Background with subtle digital blue accents */}
                           <div
-                            className="absolute inset-0 pointer-events-none opacity-20"
+                            className="absolute inset-0 pointer-events-none opacity-[0.22]"
                             style={{
                               backgroundImage:
                                 zoomLevel > 1
-                                  ? `linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px)`
-                                  : `linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px)`,
+                                  ? `linear-gradient(to right, rgba(99,102,241,0.06) 1px, transparent 1px), linear-gradient(to right, rgba(255,255,255,0.015) 1px, transparent 1px)`
+                                  : `linear-gradient(to right, rgba(99,102,241,0.04) 1px, transparent 1px)`,
                               backgroundSize:
                                 zoomLevel > 1
                                   ? `${pixelsPerSecond}px 100%, ${pixelsPerSecond / 10}px 100%`
@@ -5289,13 +5413,22 @@ const renderEditor = () => (
                                 onPointerDown={(e) =>
                                   handleClipDragStart(e, clip)
                                 }
-                                className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-[opacity,border-color,background-color] duration-150
-                                           ${clip.type === "audio" ? "rounded-2xl bg-[#2b0e45]/95 border-purple-500/25" : "rounded-lg"}
-                                           ${clip.type === "video" ? "bg-gradient-to-r from-blue-900/80 to-indigo-900/60 border-white/10" : ""}
-                                           ${clip.type === "text" ? "bg-gradient-to-r from-amber-900/80 to-orange-900/60 border-white/10" : ""}
-                                           ${clip.type === "image" ? "bg-gradient-to-r from-emerald-900/80 to-teal-900/60 border-white/10" : ""}
-                                           ${selectedClipIds.includes(clip.id) ? (clip.type === "audio" ? "z-20 opacity-100 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.3)] bg-gradient-to-b from-[#3a155c] to-[#250a3b]" : "z-20 opacity-100 border-white/60 shadow-[0_0_15px_rgba(255,255,255,0.1)] bg-white/5") : "z-10 opacity-90 hover:opacity-100 border-white/10 hover:border-white/20"}
-                                           ${layer.isHidden || (layer.isMuted && clip.type === "audio") ? "grayscale opacity-30 shadow-none" : ""}
+                                className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-[opacity,border-color,background-color,shadow] duration-250 shadow-[0_3px_10px_rgba(0,0,0,0.3)] relative group
+                                           ${clip.type === "audio" ? "rounded-xl bg-gradient-to-r from-[#21103d]/95 to-[#3b1263]/90 border-purple-500/20" : "rounded-lg"}
+                                           ${clip.type === "video" ? "bg-gradient-to-r from-[#0d1e3d]/95 via-[#122b5e]/90 to-[#0d1e3d]/80 border-indigo-500/20" : ""}
+                                           ${clip.type === "text" ? "bg-gradient-to-r from-[#441f05]/95 via-[#632900]/90 to-[#441f05]/80 border-amber-500/20" : ""}
+                                           ${clip.type === "image" ? "bg-gradient-to-r from-[#032a19]/95 via-[#0c4029]/90 to-[#032a19]/80 border-emerald-500/20" : ""}
+                                           ${selectedClipIds.includes(clip.id) 
+                                             ? (clip.type === "audio" 
+                                               ? "z-20 opacity-100 border-purple-400/95 shadow-[0_0_15px_rgba(168,85,247,0.45),_inset_0_1px_1px_rgba(255,255,255,0.15)] bg-gradient-to-b from-[#2d114c] to-[#150727]" 
+                                               : `z-20 opacity-100 shadow-[0_0_15px_rgba(99,102,241,0.35),_inset_0_1px_1px_rgba(255,255,255,0.15)] bg-gradient-to-b ${
+                                                   clip.type === "video" ? "from-[#173a7c] to-[#0a183d] border-indigo-400" 
+                                                   : clip.type === "text" ? "from-[#7e3e08] to-[#301300] border-amber-400" 
+                                                   : "from-[#115b3a] to-[#011f10] border-emerald-400"
+                                                 }`) 
+                                             : "z-10 opacity-[0.88] hover:opacity-100 border-white/[0.05] hover:border-white/15"
+                                           }
+                                           ${layer.isHidden || (layer.isMuted && clip.type === "audio") ? "grayscale opacity-25 shadow-none" : ""}
                                          `}
                                 style={{
                                   left: clip.leftSeconds * pixelsPerSecond,
@@ -5304,6 +5437,8 @@ const renderEditor = () => (
                                   willChange: "left, width",
                                 }}
                               >
+                                {/* High-glass aesthetic top specular line */}
+                                <div className="absolute inset-x-0 top-0 h-[38%] bg-gradient-to-b from-white/[0.08] to-transparent pointer-events-none z-20" />
                                 {/* Keyframes Overlay */}
                                 {clip.keyframes && clip.keyframes.length > 0 && (() => {
                                   const volumeKeyframes = clip.keyframes.filter((k) => k.properties.volume !== undefined).sort((a,b) => a.timeOffset - b.timeOffset);
@@ -5466,15 +5601,23 @@ const renderEditor = () => (
                                     pathD += `M ${x} ${y1} L ${x} ${y2} `;
                                   }
 
+                                  const gradientId = `wave-grad-${clip.id}`;
                                   return (
                                     <svg 
-                                      className="absolute inset-y-[4px] left-[12px] right-[12px] w-[calc(100%-24px)] h-[calc(100%-8px)] pointer-events-none opacity-[0.88]"
+                                      className="absolute inset-y-[4px] left-[12px] right-[12px] w-[calc(100%-24px)] h-[calc(100%-8px)] pointer-events-none opacity-[0.9]"
                                       viewBox={`0 0 ${barCount * 10} 100`}
                                       preserveAspectRatio="none"
                                     >
+                                      <defs>
+                                        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+                                          <stop offset="0%" stopColor="#c084fc" />
+                                          <stop offset="50%" stopColor="#f472b6" />
+                                          <stop offset="100%" stopColor="#818cf8" />
+                                        </linearGradient>
+                                      </defs>
                                       <path
                                         d={pathD}
-                                        stroke="#a76ef2"
+                                        stroke={`url(#${gradientId})`}
                                         strokeWidth="3.2"
                                         strokeLinecap="round"
                                       />
@@ -5492,14 +5635,14 @@ const renderEditor = () => (
                                     )}
                                   
                                   {clip.type === "audio" ? (
-                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[11px] py-0.5 px-2.5"} font-semibold text-purple-100 tracking-wide drop-shadow-sm bg-black/40 border border-purple-500/15 rounded-full inline-flex items-center backdrop-blur-md shadow-inner gap-1 sm:gap-1.5 ml-0.5 sm:ml-1`}>
+                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[10px] py-0.5 px-2"} font-bold text-purple-200 tracking-wider drop-shadow-sm bg-black/55 border border-purple-500/25 rounded-md inline-flex items-center backdrop-blur-md shadow-sm gap-1 ml-0.5 sm:ml-1 scale-95 origin-left`}>
                                       <span className={`${isCompactMode ? "w-1 h-1" : "w-1.5 h-1.5"} rounded-full bg-purple-400 animate-pulse shrink-0`} />
-                                      Audio {!isCompactMode && layer.isHidden && "(Hidden)"} {!isCompactMode && layer.isMuted && "(Muted)"}
+                                      AUDIO {!isCompactMode && layer.isHidden && "(HIDDEN)"} {!isCompactMode && layer.isMuted && "(MUTED)"}
                                     </span>
                                   ) : (
-                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[10px] py-0.5 px-1.5"} font-semibold tracking-wide text-white/90 drop-shadow-sm bg-black/40 border border-white/10 rounded shadow-sm backdrop-blur-md inline-flex items-center`}>
-                                      {clip.type.charAt(0).toUpperCase() + clip.type.slice(1)} {!isCompactMode && layer.isHidden && "(Hidden)"}{" "}
-                                      {!isCompactMode && layer.isMuted && "(Muted)"}
+                                    <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[9px] py-0.5 px-1.5"} font-bold tracking-wider text-zinc-200 drop-shadow-sm bg-black/55 border border-white/10 rounded-md shadow-sm backdrop-blur-md inline-flex items-center uppercase scale-95 origin-left`}>
+                                      {clip.type} {!isCompactMode && layer.isHidden && "(HIDDEN)"}{" "}
+                                      {!isCompactMode && layer.isMuted && "(MUTED)"}
                                     </span>
                                   )}
 
@@ -5627,26 +5770,32 @@ const renderEditor = () => (
                                   </svg>
                                 )}
 
-                                {/* Trim Controls for selected */}
+                                {/* Trim Controls with premium high-tech glowing edge handle bar */}
                                 {selectedClipId === clip.id && (
                                   <>
                                     <div
                                       onPointerDown={(e) =>
                                         handleTrimStart(e, clip, "left")
                                       }
-                                      className="absolute left-0 top-0 bottom-0 w-3 bg-white hover:w-4 flex items-center justify-center cursor-col-resize transition-all rounded-r"
+                                      className="absolute left-0 top-0 bottom-0 w-[10px] bg-white/90 hover:bg-white border-r border-black/40 flex items-center justify-center cursor-col-resize hover:w-[13px] transition-all z-25 shadow-[1px_0_6px_rgba(0,0,0,0.5)]"
                                       style={{ touchAction: "none" }}
                                     >
-                                      <div className="w-0.5 h-3 bg-black/50 rounded-full"></div>
+                                      <div className="flex flex-col gap-0.5 justify-center items-center">
+                                        <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+                                        <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+                                      </div>
                                     </div>
                                     <div
                                       onPointerDown={(e) =>
                                         handleTrimStart(e, clip, "right")
                                       }
-                                      className="absolute right-0 top-0 bottom-0 w-3 bg-white hover:w-4 flex items-center justify-center cursor-col-resize transition-all rounded-l"
+                                      className="absolute right-0 top-0 bottom-0 w-[10px] bg-white/90 hover:bg-white border-l border-black/40 flex items-center justify-center cursor-col-resize hover:w-[13px] transition-all z-25 shadow-[-1px_0_6px_rgba(0,0,0,0.5)]"
                                       style={{ touchAction: "none" }}
                                     >
-                                      <div className="w-0.5 h-3 bg-black/50 rounded-full"></div>
+                                      <div className="flex flex-col gap-0.5 justify-center items-center">
+                                        <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+                                        <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+                                      </div>
                                     </div>
                                   </>
                                 )}
@@ -5686,20 +5835,22 @@ const renderEditor = () => (
                                   });
                                   setActiveExpandedMenu("transition");
                                 }}
-                                className={`w-[19px] h-[19px] rounded-full flex items-center justify-center transition-all cursor-pointer ${
-                                    hasTransition
-                                      ? "bg-indigo-500 hover:bg-indigo-600 border border-indigo-400 text-white hover:scale-[1.15] active:scale-95 shadow-md shadow-indigo-500/30"
-                                      : "bg-zinc-800 hover:bg-indigo-500 border border-white/20 hover:border-indigo-400/50 text-zinc-300 hover:text-white hover:scale-[1.15] active:scale-95 shadow-lg opacity-60 hover:opacity-100"
-                                  }`}
-                                  title={hasTransition ? `Edit transition: ${current.transition?.type}` : "Add Transition"}
-                                >
+                                className={`w-[22px] h-[22px] rounded-md flex items-center justify-center transition-all duration-200 cursor-pointer border shadow-[0_3px_8px_rgba(0,0,0,0.5)] ${
+                                  hasTransition
+                                    ? "bg-gradient-to-br from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 border-indigo-400 text-white hover:scale-[1.12] active:scale-95 shadow-indigo-500/25 rotate-45"
+                                    : "bg-[#161619] hover:bg-indigo-600 border-white/[0.08] hover:border-indigo-400/50 text-zinc-400 hover:text-white hover:scale-[1.12] active:scale-95 opacity-80 hover:opacity-100"
+                                }`}
+                                title={hasTransition ? `Edit transition: ${current.transition?.type}` : "Add Transition"}
+                              >
+                                <div className={hasTransition ? "-rotate-45" : ""}>
                                   {hasTransition ? (
-                                    <span className="text-[9px] font-extrabold text-white uppercase tracking-wider">T</span>
+                                    <span className="text-[8px] font-bold text-white uppercase tracking-wider font-mono">X</span>
                                   ) : (
-                                    <PlusIcon size={10} className="stroke-[3]" />
+                                    <PlusIcon size={11} className="stroke-[2.5]" />
                                   )}
-                                </button>
-                              </div>
+                                </div>
+                              </button>
+                            </div>
                             );
                           })}
                         </div>
@@ -5707,11 +5858,18 @@ const renderEditor = () => (
 
                       {/* Empty state instruction inside timeline */}
                       {layers.length === 0 && (
-                        <div className="w-full h-[150px] flex flex-col items-center justify-center pt-8 text-zinc-500 gap-3">
-                          <PlusCircle size={32} className="opacity-30" />
-                          <span className="text-sm font-medium tracking-wide">
-                            Tap '+' to add media to your timeline
-                          </span>
+                        <div className="w-full h-[155px] flex flex-col items-center justify-center py-10 text-zinc-450 gap-3 max-w-md mx-auto select-none">
+                          <div className="w-12 h-12 rounded-full bg-zinc-900/50 border border-white/[0.04] flex items-center justify-center shadow-lg">
+                            <PlusIcon className="text-zinc-500" size={18} />
+                          </div>
+                          <div className="text-center">
+                            <span className="text-xs font-semibold text-zinc-400 mb-1 block uppercase tracking-wider">
+                              Timeline is Empty
+                            </span>
+                            <span className="text-[11px] text-zinc-500 leading-relaxed font-sans block max-w-[280px] mx-auto">
+                              Press the plus icon next to track headers to begin crafting your slow-motion compilation.
+                            </span>
+                          </div>
                         </div>
                       )}
 
@@ -5754,7 +5912,7 @@ const renderEditor = () => (
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#252528] overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/5 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#0d0d12]/95 backdrop-blur-xl overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.7),_0_0_20px_rgba(99,102,241,0.06)] border border-white/10 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "transition" && transitionModal && (() => {
@@ -5802,7 +5960,7 @@ const renderEditor = () => (
                               setTransitionModal(null);
                               setActiveExpandedMenu(null);
                             }}
-                            className="text-[8px] bg-red-500/10 hover:bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider transition-all"
+                            className="text-[8px] bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider transition-all"
                             title="Remove transition"
                           >
                             Remove
@@ -5833,10 +5991,10 @@ const renderEditor = () => (
                               setTransitionModal(updatedModal);
                               addTransition(transitionModal.currentClipId, opt.id, transitionModal.duration, true);
                             }}
-                            className={`shrink-0 px-2 py-1 rounded-lg border transition-all duration-150 snap-start flex flex-col items-center min-w-[64px] ${
+                            className={`shrink-0 px-2.5 py-1 rounded-lg border transition-all duration-150 snap-start flex flex-col items-center min-w-[70px] ${
                               isSelected
-                                ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
-                                : "bg-zinc-800/80 border-white/5 hover:border-white/10 text-zinc-400 hover:text-zinc-200"
+                                ? "bg-indigo-500/15 border-indigo-550/40 text-indigo-300 shadow-[0_0_8px_rgba(99,102,241,0.2)]"
+                                : "bg-[#151518]/70 border-white/[0.04] hover:border-white/[0.08] text-zinc-400 hover:text-zinc-200"
                             }`}
                           >
                             <span className="text-[8.5px] font-bold leading-tight truncate w-full text-center">{opt.name}</span>
@@ -6104,7 +6262,11 @@ const renderEditor = () => (
                             avgFlowMagnitude,
                             maxFlowMagnitude,
                             flowVisualization,
-                            isFlowCorrect
+                            isFlowCorrect,
+                            interpolatedFramesCount: decodeResult.interpolatedFramesCount,
+                            averagePsnr: decodeResult.averagePsnr,
+                            averageWarpError: decodeResult.averageWarpError,
+                            interpolationVisualization: decodeResult.interpolationVisualization
                           });
 
                           setSmoothProcessingProgress(100);
@@ -6263,6 +6425,58 @@ const renderEditor = () => (
                             ) : (
                               <div className="mt-0.5 bg-white/[0.01] border border-dashed border-white/5 text-[7.5px] py-2 px-2 text-zinc-500 text-center rounded leading-snug">
                                 Vector tracking lines are plotted overlaying the active video stream once rendering has successfully executed.
+                              </div>
+                            )}
+
+                            {/* W1D6 Frame Interpolation Diagnostics */}
+                            {opticalFlowDiagnostics?.clipId === selectedClipId && opticalFlowDiagnostics?.interpolatedFramesCount !== undefined && (
+                              <div className="mt-3.5 pt-3.5 flex flex-col gap-1.5 border-t border-white/5">
+                                <div className="flex justify-between items-center text-[7.5px] font-bold text-emerald-400 uppercase tracking-widest leading-none">
+                                  <span>Frame Interpolation (W1D6)</span>
+                                  <span className="text-[7px] px-1 py-[1.5px] rounded font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    30fps → 60fps Safe
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-1 text-center mt-0.5">
+                                  <div className="bg-white/[0.02] border border-white/5 rounded py-1 px-1 flex flex-col justify-center">
+                                    <div className="text-[6.5px] text-zinc-500 font-bold uppercase leading-none">Mean PSNR</div>
+                                    <div className="text-[8.5px] text-emerald-400 mt-1 leading-none font-mono font-semibold">
+                                      {opticalFlowDiagnostics.averagePsnr && opticalFlowDiagnostics.averagePsnr > 0 ? `${opticalFlowDiagnostics.averagePsnr.toFixed(2)} dB` : "—"}
+                                    </div>
+                                  </div>
+                                  <div className="bg-white/[0.02] border border-white/5 rounded py-1 px-1 flex flex-col justify-center">
+                                    <div className="text-[6.5px] text-zinc-500 font-bold uppercase leading-none">Warp Error</div>
+                                    <div className="text-[8.5px] text-emerald-400 mt-1 leading-none font-mono font-semibold">
+                                      {opticalFlowDiagnostics.averageWarpError !== undefined ? `${opticalFlowDiagnostics.averageWarpError.toFixed(4)} px` : "—"}
+                                    </div>
+                                  </div>
+                                  <div className="bg-white/[0.02] border border-white/5 rounded py-1 px-1 flex flex-col justify-center">
+                                    <div className="text-[6.5px] text-zinc-500 font-bold uppercase leading-none">Interpolates</div>
+                                    <div className="text-[8.5px] text-zinc-100 mt-1 leading-none font-mono font-semibold">
+                                      {opticalFlowDiagnostics.interpolatedFramesCount} frames
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {opticalFlowDiagnostics?.interpolationVisualization && (
+                                  <div className="mt-1 rounded border border-white/5 overflow-hidden relative group">
+                                    <img 
+                                      src={opticalFlowDiagnostics.interpolationVisualization} 
+                                      alt="Frame Interpolation Split View" 
+                                      className="w-full h-auto aspect-video object-cover"
+                                    />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-transparent to-transparent flex items-end justify-between p-1.5">
+                                      <span className="text-[7px] font-mono text-emerald-400 font-bold uppercase tracking-wider">Split View Comparison</span>
+                                      <span className="text-[7px] font-mono text-zinc-400">t = 0.5 Backward Warp</span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="mt-0.5 text-[7px] text-zinc-400 bg-white/[0.01] border border-white/5 py-1 px-1.5 rounded flex items-center gap-1">
+                                  <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></span>
+                                  <span>Safe-interpolated frame generated with linear backward warping & replicate borders</span>
+                                </div>
                               </div>
                             )}
                           </div>

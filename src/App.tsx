@@ -3610,7 +3610,7 @@ const renderHome = () => {
               })}
             </div>
 
-            <div className="absolute bottom-12 left-0 right-0 flex flex-col items-center gap-6 pointer-events-none">
+            <div className="absolute bottom-[50px] left-0 right-0 flex flex-col items-center gap-6 pointer-events-none">
               {focusedRatio === "custom" ? (
                 <div className="flex items-center gap-3 bg-zinc-900/80 backdrop-blur-md rounded-2xl p-2 border border-zinc-700 pointer-events-auto">
                    <input type="number" placeholder="H" className="bg-transparent w-20 text-center text-xl text-white outline-none font-bold" value={customRatioH} onChange={(e) => setCustomRatioH(e.target.value)} />
@@ -3628,12 +3628,12 @@ const renderHome = () => {
               )}
               
               <button 
-                className="pointer-events-auto w-[240px] h-14 border-[3px] border-white rounded-full flex items-center justify-center font-bold text-white hover:bg-white hover:text-black transition-colors text-lg"
+                className="pointer-events-auto w-[150px] h-11 border-2 border-white rounded-full flex items-center justify-center font-bold text-white hover:bg-white hover:text-black transition-colors text-sm"
                 onClick={() => {
                    handleCreateProject(focusedRatio === "custom" ? `${customRatioW}:${customRatioH}` : focusedRatio);
                 }}
               >
-                 Create Project
+                 Create
               </button>
             </div>
           </motion.div>

@@ -449,8 +449,8 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                     mapBy.put(0, 0, mapByData);
 
                                     // 2. Backward Warping via remap (linear interpolation, border replicated to handle edge artifacts)
-                                    Imgproc.remap(prevMat, warpedA, mapAx, mapAy, Imgproc.INTER_LINEAR, Imgproc.BORDER_REPLICATE);
-                                    Imgproc.remap(currMat, warpedB, mapBx, mapBy, Imgproc.INTER_LINEAR, Imgproc.BORDER_REPLICATE);
+                                    Imgproc.remap(prevMat, warpedA, mapAx, mapAy, Imgproc.INTER_LINEAR, Core.BORDER_REPLICATE);
+                                    Imgproc.remap(currMat, warpedB, mapBx, mapBy, Imgproc.INTER_LINEAR, Core.BORDER_REPLICATE);
 
                                     // 3. Generate Intermediate Frame (t = 0.5)
                                     Core.addWeighted(warpedA, 0.5, warpedB, 0.5, 0.0, intermediateFrame);

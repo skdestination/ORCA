@@ -66,9 +66,11 @@ import {
   Bell,
   ChevronRight,
   MoreHorizontal,
+  Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Capacitor } from "@capacitor/core";
+import { App as CapApp } from "@capacitor/app";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Media } from "@capacitor-community/media";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -102,9 +104,10 @@ export const DEFAULT_FLOW_BAR_ORDER = [
 interface MaskControlOverlayProps {
   clip: any;
   updateClipsProperties: (clipIds: string[], updates: any) => void;
+  onShowAdjustments?: () => void;
 }
 
-function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayProps) {
+function MaskControlOverlay({ clip, updateClipsProperties, onShowAdjustments }: MaskControlOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeDrag, setActiveDrag] = useState<"width" | "height" | "roundness" | null>(null);
 
@@ -112,6 +115,8 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
   const maskWidth = clip.maskWidth ?? (maskType === "half" ? 100 : 60);
   const maskHeight = clip.maskHeight ?? (maskType === "half" ? 50 : 60);
   const maskRoundness = clip.maskRoundness ?? 15;
+  const maskPositionX = clip.maskPositionX ?? 0.5;
+  const maskPositionY = clip.maskPositionY ?? 0.5;
 
   const halfW = maskWidth / 2;
   const halfH = maskHeight / 2;
@@ -120,6 +125,22 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
     e.preventDefault();
     e.stopPropagation();
     setActiveDrag(type);
+  };
+
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const startPress = (e: React.MouseEvent | React.TouchEvent) => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      onShowAdjustments?.();
+    }, 450); // 450ms hold delay for mask long-tap adjustment activation
+  };
+
+  const endPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -132,7 +153,7 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       const h = rect.height;
 
       if (activeDrag === "width") {
-        const centerX = rect.left + w / 2;
+        const centerX = rect.left + maskPositionX * w;
         const dx = Math.abs(clientX - centerX);
         const newWidth = Math.max(5, Math.min(100, Math.round((dx / w) * 200)));
         updateClipsProperties([clip.id], { maskWidth: newWidth });
@@ -140,16 +161,16 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
         if (maskType === "half") {
           const dy = clientY - rect.top;
           const newHeight = Math.max(0, Math.min(100, Math.round((dy / h) * 100)));
-          updateClipsProperties([clip.id], { maskHeight: newHeight });
+          updateClipsProperties([clip.id], { maskHeight: newHeight, maskPositionY: newHeight / 100 });
         } else {
-          const centerY = rect.top + h / 2;
+          const centerY = rect.top + maskPositionY * h;
           const dy = Math.abs(clientY - centerY);
           const newHeight = Math.max(5, Math.min(100, Math.round((dy / h) * 200)));
           updateClipsProperties([clip.id], { maskHeight: newHeight });
         }
       } else if (activeDrag === "roundness") {
-        const rightEdgeX = rect.left + w / 2 + (halfW / 100) * w;
-        const topEdgeY = rect.top + h / 2 - (halfH / 100) * h;
+        const rightEdgeX = rect.left + maskPositionX * w + (halfW / 100) * w;
+        const topEdgeY = rect.top + maskPositionY * h - (halfH / 100) * h;
         const dx = rightEdgeX - clientX;
         const dy = clientY - topEdgeY;
         const dragVal = Math.max(0, Math.min(100, Math.round((dx + dy) / 2)));
@@ -181,7 +202,7 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       window.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("touchend", onTouchEnd);
     };
-  }, [activeDrag, clip.id, maskType, halfW, halfH, updateClipsProperties]);
+  }, [activeDrag, clip.id, maskType, halfW, halfH, maskPositionX, maskPositionY, updateClipsProperties]);
 
   if (!maskType || maskType === "none") return null;
 
@@ -194,43 +215,69 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
         {maskType === "circle" && (
           <ellipse
-            cx="50%"
-            cy="50%"
+            cx={`${maskPositionX * 100}%`}
+            cy={`${maskPositionY * 100}%`}
             rx={`${halfW}%`}
             ry={`${halfH}%`}
-            fill="none"
+            fill="rgba(168, 85, 247, 0.04)"
             stroke="#a855f7"
-            strokeWidth="2"
+            strokeWidth="3"
             strokeDasharray="4 3"
-            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+            className="drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)] cursor-pointer pointer-events-auto hover:stroke-[#c084fc] transition-colors"
+            onMouseDown={startPress}
+            onTouchStart={startPress}
+            onMouseUp={endPress}
+            onTouchEnd={endPress}
+            onMouseLeave={endPress}
           />
         )}
         {maskType === "square" && (
           <rect
-            x={`${50 - halfW}%`}
-            y={`${50 - halfH}%`}
+            x={`${maskPositionX * 100 - halfW}%`}
+            y={`${maskPositionY * 100 - halfH}%`}
             width={`${maskWidth}%`}
             height={`${maskHeight}%`}
             rx={`${maskRoundness / 2}%`}
             ry={`${maskRoundness / 2}%`}
-            fill="none"
+            fill="rgba(34, 197, 94, 0.04)"
             stroke="#22c55e"
-            strokeWidth="2"
+            strokeWidth="3"
             strokeDasharray="4 3"
-            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+            className="drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)] cursor-pointer pointer-events-auto hover:stroke-[#4ade80] transition-colors"
+            onMouseDown={startPress}
+            onTouchStart={startPress}
+            onMouseUp={endPress}
+            onTouchEnd={endPress}
+            onMouseLeave={endPress}
           />
         )}
         {maskType === "half" && (
-          <line
-            x1="0%"
-            y1={`${maskHeight}%`}
-            x2="100%"
-            y2={`${maskHeight}%`}
-            stroke="#3b82f6"
-            strokeWidth="2"
-            strokeDasharray="4 3"
-            className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
-          />
+          <>
+            <line
+              x1="0%"
+              y1={`${maskPositionY * 100}%`}
+              x2="100%"
+              y2={`${maskPositionY * 100}%`}
+              stroke="transparent"
+              strokeWidth="18"
+              className="cursor-row-resize pointer-events-auto"
+              onMouseDown={startPress}
+              onTouchStart={startPress}
+              onMouseUp={endPress}
+              onTouchEnd={endPress}
+              onMouseLeave={endPress}
+            />
+            <line
+              x1="0%"
+              y1={`${maskPositionY * 100}%`}
+              x2="100%"
+              y2={`${maskPositionY * 100}%`}
+              stroke="#3b82f6"
+              strokeWidth="2"
+              strokeDasharray="4 3"
+              className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] pointer-events-none"
+            />
+          </>
         )}
       </svg>
 
@@ -238,13 +285,13 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       {(maskType === "circle" || maskType === "square") && (
         <div
           style={{
-            left: `${50 + halfW}%`,
-            top: `50%`,
+            left: `${maskPositionX * 100 + halfW}%`,
+            top: `${maskPositionY * 100}%`,
             transform: "translate(-50%, -50%)"
           }}
           onMouseDown={(e) => handleStartDrag(e, "width")}
           onTouchStart={(e) => handleStartDrag(e, "width")}
-          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ew-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ew-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform z-50 animate-pulse"
           title="Drag to adjust width"
         >
           <span className="text-[14px] font-bold select-none leading-none">↔</span>
@@ -254,13 +301,13 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       {(maskType === "circle" || maskType === "square") && (
         <div
           style={{
-            left: `50%`,
-            top: `${50 + halfH}%`,
+            left: `${maskPositionX * 100}%`,
+            top: `${maskPositionY * 100 + halfH}%`,
             transform: "translate(-50%, -50%)"
           }}
           onMouseDown={(e) => handleStartDrag(e, "height")}
           onTouchStart={(e) => handleStartDrag(e, "height")}
-          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-white border-2 border-white shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform z-50 animate-pulse"
           title="Drag to adjust height"
         >
           <span className="text-[14px] font-bold select-none leading-none">↕</span>
@@ -271,12 +318,12 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
         <div
           style={{
             left: `50%`,
-            top: `${maskHeight}%`,
+            top: `${maskPositionY * 100}%`,
             transform: "translate(-50%, -50%)"
           }}
           onMouseDown={(e) => handleStartDrag(e, "height")}
           onTouchStart={(e) => handleStartDrag(e, "height")}
-          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-[#3b82f6] border-2 border-[#3b82f6] shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          className="absolute w-7 h-7 flex items-center justify-center rounded-full bg-zinc-950/90 text-[#3b82f6] border-2 border-[#3b82f6] shadow-xl cursor-ns-resize pointer-events-auto hover:scale-110 active:scale-95 transition-transform z-50"
           title="Drag and adjust split height"
         >
           <span className="text-[14px] font-bold select-none leading-none">↕</span>
@@ -286,13 +333,13 @@ function MaskControlOverlay({ clip, updateClipsProperties }: MaskControlOverlayP
       {maskType === "square" && (
         <div
           style={{
-            left: `${50 + halfW - (maskRoundness / 4)}%`,
-            top: `${50 - halfH + (maskRoundness / 4)}%`,
+            left: `${maskPositionX * 100 + halfW - (maskRoundness / 4)}%`,
+            top: `${maskPositionY * 100 - halfH + (maskRoundness / 4)}%`,
             transform: "translate(-50%, -50%)"
           }}
           onMouseDown={(e) => handleStartDrag(e, "roundness")}
           onTouchStart={(e) => handleStartDrag(e, "roundness")}
-          className="absolute w-6 h-6 flex items-center justify-center rounded-full bg-emerald-950 text-emerald-400 border-2 border-emerald-400 shadow-xl cursor-pointer pointer-events-auto hover:scale-110 active:scale-95 transition-transform"
+          className="absolute w-6 h-6 flex items-center justify-center rounded-full bg-emerald-950 text-emerald-400 border-2 border-emerald-400 shadow-xl cursor-pointer pointer-events-auto hover:scale-110 active:scale-95 transition-transform z-50"
           title="Drag to adjust corner rounding"
         >
           <span className="text-[11px] font-bold select-none leading-none">◯</span>
@@ -469,6 +516,56 @@ function ProjectCoverImage({ p }: { p: Project }) {
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!(document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement || (document as any).msFullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    document.addEventListener("mozfullscreenchange", handleFullscreenChange);
+    document.addEventListener("MSFullscreenChange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    try {
+      const docEl = document.documentElement as any;
+      const doc = document as any;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement && !doc.mozFullScreenElement && !doc.msFullscreenElement) {
+        if (docEl.requestFullscreen) {
+          docEl.requestFullscreen();
+        } else if (docEl.webkitRequestFullscreen) {
+          docEl.webkitRequestFullscreen();
+        } else if (docEl.mozRequestFullScreen) {
+          docEl.mozRequestFullScreen();
+        } else if (docEl.msRequestFullscreen) {
+          docEl.msRequestFullscreen();
+        }
+      } else {
+        if (doc.exitFullscreen) {
+          doc.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          doc.webkitExitFullscreen();
+        } else if (doc.mozCancelFullScreen) {
+          doc.mozCancelFullScreen();
+        } else if (doc.msExitFullscreen) {
+          doc.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn("Fullscreen toggle failed:", err);
+      showToast("Fullscreen not allowed by browser layout.");
+    }
+  };
+
   const [isRecording, setIsRecording] = useState(false);
   const [hasMicPermission, setHasMicPermission] = useState(false);
   const [voiceoverLayerId, setVoiceoverLayerId] = useState<string | null>(null);
@@ -754,9 +851,12 @@ export default function App() {
   );
   const [activeTransformTab, setActiveTransformTab] = useState<"position" | "scale" | "rotate">("position");
   const [maskAdjustOpen, setMaskAdjustOpen] = useState(false);
+  const [showFloatingMaskAdjust, setShowFloatingMaskAdjust] = useState(false);
   useEffect(() => {
     if (activeExpandedMenu === "mask") {
       setMaskAdjustOpen(true);
+    } else {
+      setShowFloatingMaskAdjust(false);
     }
   }, [activeExpandedMenu]);
   const [layerMenuOpenId, setLayerMenuOpenId] = useState<string | null>(null);
@@ -1363,12 +1463,52 @@ export default function App() {
         console.warn("Permission API check/request failed:", permErr);
       }
 
-      // 5. Save the video file to the Photos Gallery
+      // 5. Fetch or dynamically create a target album to resolve 'Album identifier required'
+      let albumIdentifier: string | undefined;
+      try {
+        const albumsResult = await Media.getAlbums();
+        console.log("Saving to gallery: Existing albums retrieved:", albumsResult.albums);
+        
+        // Look for existing premium app folder or camera stream
+        const targetAlbum = albumsResult.albums.find(
+          (a) =>
+            a.name.toLowerCase() === "orca studio" ||
+            a.name.toLowerCase() === "camera" ||
+            a.name.toLowerCase() === "movies" ||
+            a.name.toLowerCase() === "videos"
+        );
+
+        if (targetAlbum) {
+          albumIdentifier = targetAlbum.identifier;
+        } else {
+          // Attempt to create a designated album for premium video outputs
+          try {
+            await Media.createAlbum({ name: "ORCA Studio" });
+            const refreshed = await Media.getAlbums();
+            const created = refreshed.albums.find((a) => a.name.toLowerCase() === "orca studio");
+            if (created) {
+              albumIdentifier = created.identifier;
+            } else if (refreshed.albums.length > 0) {
+              albumIdentifier = refreshed.albums[0].identifier;
+            }
+          } catch (createErr) {
+            console.warn("Could not create designated album, using first available collection:", createErr);
+            if (albumsResult.albums.length > 0) {
+              albumIdentifier = albumsResult.albums[0].identifier;
+            }
+          }
+        }
+      } catch (albumErr) {
+        console.warn("Failed to fetch or query native albums catalog:", albumErr);
+      }
+
+      // 6. Save the video file to the Photos Gallery with retrieved identifier
       await Media.saveVideo({
         path: writeResult.uri,
+        albumIdentifier: albumIdentifier,
       });
 
-      // 6. Clean up temporary cache file
+      // 7. Clean up temporary cache file
       try {
         await Filesystem.deleteFile({
           path: filename,
@@ -1679,6 +1819,75 @@ export default function App() {
       };
     }
   }, [currentScreen]);
+
+  // Create refs for back-button-related states to avoid stale closures in unified Capacitor back handler
+  const currentScreenRef = useRef(currentScreen);
+  const activeExpandedMenuRef = useRef(activeExpandedMenu);
+  const transitionModalRef = useRef(transitionModal);
+  const projectToDeleteRef = useRef(projectToDelete);
+  const isCreatingProjectRef = useRef(isCreatingProject);
+  const opticalFlowDiagnosticsRef = useRef(opticalFlowDiagnostics);
+  const layerMenuOpenIdRef = useRef(layerMenuOpenId);
+  const projectMenuOpenIdRef = useRef(projectMenuOpenId);
+  const selectedClipIdsRef = useRef(selectedClipIds);
+
+  useEffect(() => { currentScreenRef.current = currentScreen; }, [currentScreen]);
+  useEffect(() => { activeExpandedMenuRef.current = activeExpandedMenu; }, [activeExpandedMenu]);
+  useEffect(() => { transitionModalRef.current = transitionModal; }, [transitionModal]);
+  useEffect(() => { projectToDeleteRef.current = projectToDelete; }, [projectToDelete]);
+  useEffect(() => { isCreatingProjectRef.current = isCreatingProject; }, [isCreatingProject]);
+  useEffect(() => { opticalFlowDiagnosticsRef.current = opticalFlowDiagnostics; }, [opticalFlowDiagnostics]);
+  useEffect(() => { layerMenuOpenIdRef.current = layerMenuOpenId; }, [layerMenuOpenId]);
+  useEffect(() => { projectMenuOpenIdRef.current = projectMenuOpenId; }, [projectMenuOpenId]);
+  useEffect(() => { selectedClipIdsRef.current = selectedClipIds; }, [selectedClipIds]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let activeListener: any = null;
+
+    const initBackButton = async () => {
+      try {
+        activeListener = await CapApp.addListener("backButton", () => {
+          if (projectToDeleteRef.current) {
+            setProjectToDelete(null);
+          } else if (isCreatingProjectRef.current) {
+            setIsCreatingProject(false);
+          } else if (projectMenuOpenIdRef.current) {
+            setProjectMenuOpenId(null);
+          } else if (transitionModalRef.current) {
+            setTransitionModal(null);
+          } else if (opticalFlowDiagnosticsRef.current) {
+            setOpticalFlowDiagnostics(null);
+          } else if (activeExpandedMenuRef.current) {
+            setActiveExpandedMenu(null);
+          } else if (layerMenuOpenIdRef.current) {
+            setLayerMenuOpenId(null);
+          } else if (selectedClipIdsRef.current.length > 0) {
+            setSelectedClipIds([]);
+          } else if (currentScreenRef.current === "settings") {
+            setCurrentScreen("home");
+          } else if (currentScreenRef.current === "editor") {
+            handleBackToHome();
+          } else {
+            // No modals/overlays or secondary screens open while on home screen: exit under native platforms
+            CapApp.exitApp();
+          }
+        });
+        console.log("Successfully registered Capacitor backButton listener");
+      } catch (err) {
+        console.warn("Failed to register backButton listener:", err);
+      }
+    };
+
+    initBackButton();
+
+    return () => {
+      if (activeListener) {
+        activeListener.remove();
+      }
+    };
+  }, []);
 
   const createProject = (ratio: string) => {
     const newProjectId = Math.random().toString(36).substring(2, 9);
@@ -2600,6 +2809,10 @@ export default function App() {
     startDistance: number;
     startScale: number;
     activeClipId: string;
+    startMaskWidth?: number;
+    startMaskHeight?: number;
+    startMaskPositionX?: number;
+    startMaskPositionY?: number;
   } | null>(null);
 
   const handlePreviewTouchStart = (e: React.TouchEvent) => {
@@ -2623,6 +2836,10 @@ export default function App() {
           startDistance,
           startScale: clip.scale || 1,
           activeClipId: clip.id,
+          startMaskWidth: clip.maskWidth ?? (clip.maskType === "half" ? 100 : 60),
+          startMaskHeight: clip.maskHeight ?? (clip.maskType === "half" ? 50 : 60),
+          startMaskPositionX: clip.maskPositionX ?? 0.5,
+          startMaskPositionY: clip.maskPositionY ?? 0.5,
         };
       }
     }
@@ -2638,30 +2855,71 @@ export default function App() {
 
       const currentX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
       const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      const deltaX = (currentX - previewTouchRef.current.startX) / appScale;
-      const deltaY = (currentY - previewTouchRef.current.startY) / appScale;
       
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const currentDistance = Math.hypot(dx, dy);
       
-      const { startTranslateX, startTranslateY, startDistance, startScale, activeClipId } = previewTouchRef.current;
+      const { 
+        startTranslateX, 
+        startTranslateY, 
+        startDistance, 
+        startScale, 
+        activeClipId,
+        startMaskWidth,
+        startMaskHeight,
+        startMaskPositionX,
+        startMaskPositionY 
+      } = previewTouchRef.current;
       
       const scaleRatio = currentDistance / startDistance;
-      const newScale = Math.max(0.1, Math.min(5.0, startScale * scaleRatio));
 
-      setClips((prev) => 
-        prev.map((c) =>
-          c.id === activeClipId
-            ? { 
-                ...c, 
-                translateX: startTranslateX + deltaX, 
-                translateY: startTranslateY + deltaY,
-                scale: newScale
-              }
-            : c
-        )
-      );
+      if (clip && clip.maskType && clip.maskType !== "none") {
+        const previewEl = document.getElementById("preview-screen");
+        const rect = previewEl ? previewEl.getBoundingClientRect() : { width: 500, height: 300 };
+        const deltaPercentX = (currentX - previewTouchRef.current.startX) / (rect.width || 500);
+        const deltaPercentY = (currentY - previewTouchRef.current.startY) / (rect.height || 300);
+
+        const newMaskPositionX = Math.max(0, Math.min(1, (startMaskPositionX ?? 0.5) + deltaPercentX));
+        const newMaskPositionY = Math.max(0, Math.min(1, (startMaskPositionY ?? 0.5) + deltaPercentY));
+
+        const startW = startMaskWidth ?? (clip.maskType === "half" ? 100 : 60);
+        const startH = startMaskHeight ?? (clip.maskType === "half" ? 50 : 60);
+
+        const newMaskWidth = Math.max(5, Math.min(100, Math.round(startW * scaleRatio)));
+        const newMaskHeight = Math.max(5, Math.min(100, Math.round(startH * scaleRatio)));
+
+        setClips((prev) => 
+          prev.map((c) =>
+            c.id === activeClipId
+              ? { 
+                  ...c, 
+                  maskPositionX: c.maskType === "half" ? 0.5 : newMaskPositionX,
+                  maskPositionY: newMaskPositionY,
+                  maskWidth: c.maskType === "half" ? 100 : newMaskWidth,
+                  maskHeight: newMaskHeight
+                }
+              : c
+          )
+        );
+      } else {
+        const deltaX = (currentX - previewTouchRef.current.startX) / appScale;
+        const deltaY = (currentY - previewTouchRef.current.startY) / appScale;
+        const newScale = Math.max(0.1, Math.min(5.0, startScale * scaleRatio));
+
+        setClips((prev) => 
+          prev.map((c) =>
+            c.id === activeClipId
+              ? { 
+                  ...c, 
+                  translateX: startTranslateX + deltaX, 
+                  translateY: startTranslateY + deltaY,
+                  scale: newScale
+                }
+              : c
+          )
+        );
+      }
     }
   };
 
@@ -3363,10 +3621,24 @@ const renderHome = () => {
               </div>
             </div>
 
-            <button className="relative w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer">
-              <Bell size={18} className="transition-transform group-hover:rotate-12" />
-              <span className="absolute top-2.5 right-2.5 w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.8)]" />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={toggleFullscreen}
+                className="w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer"
+                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+              >
+                {isFullscreen ? (
+                  <Minimize2 size={18} className="transition-transform group-hover:scale-110" />
+                ) : (
+                  <Maximize2 size={18} className="transition-transform group-hover:scale-110" />
+                )}
+              </button>
+
+              <button className="relative w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer">
+                <Bell size={18} className="transition-transform group-hover:rotate-12" />
+                <span className="absolute top-2.5 right-2.5 w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.8)]" />
+              </button>
+            </div>
           </div>
 
           {/* Premium Branded ORCA Creative Studio Logo */}
@@ -3784,122 +4056,262 @@ const renderHome = () => {
 const renderEditor = () => (
   <div className="flex flex-col h-screen w-full bg-[#1e1e20] overflow-hidden">
       {/* Exporting Overlay */}
-      {isExporting && (
-        <div className="fixed inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-8">
-          <div className="w-full max-w-md bg-zinc-900 rounded-3xl p-6 border border-white/10 flex flex-col items-center">
-            <div className="text-white font-bold text-lg mb-2">
-              Exporting Video...
-            </div>
-            <div className="text-zinc-400 text-sm mb-6">
-              Please do not close this window
-            </div>
-            <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-white transition-all duration-300"
-                style={{ width: `${exportProgress}%` }}
-              ></div>
-            </div>
-            <div className="text-white font-mono text-xs mt-3">
-              {exportProgress}%
-            </div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {isExporting && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex flex-col items-center justify-center p-4 sm:p-8"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              transition={{ type: "spring", damping: 25, stiffness: 180 }}
+              className="w-full max-w-lg bg-[#0e0e11] border border-white/10 rounded-[32px] p-8 shadow-[0_24px_80px_rgba(0,0,0,0.9)] relative overflow-hidden"
+            >
+              {/* Premium Glow effect background */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-80 h-32 bg-purple-500/10 blur-[60px] pointer-events-none rounded-full" />
+              
+              <div className="flex flex-col items-center text-center relative z-10">
+                {/* Visual Ring Spinner */}
+                <div className="relative w-24 h-24 mb-6 flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full border-4 border-white/[0.03]" />
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
+                    className="absolute inset-0 rounded-full border-4 border-l-purple-500 border-t-indigo-500 border-r-transparent border-b-transparent shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+                  />
+                  <Sparkles size={24} className="text-purple-400 animate-pulse" />
+                </div>
+
+                <div className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold mb-1">
+                  Master Render Engine
+                </div>
+                <h3 className="text-xl font-medium text-white mb-2 tracking-tight">
+                  Encoding Premium Asset
+                </h3>
+                
+                {/* Phase Indicator based on progress */}
+                <p className="text-zinc-500 text-xs mb-8 min-h-[16px] font-medium max-w-[85%]">
+                  {exportProgress < 25 && "Assembling timeline tracks & synchronizing media frames..."}
+                  {exportProgress >= 25 && exportProgress < 50 && "Blending complex crossfades & mixing sound levels..."}
+                  {exportProgress >= 50 && exportProgress < 75 && "Applying deep color grades & lighting filters..."}
+                  {exportProgress >= 75 && exportProgress < 95 && "Compiling spatial video structures & final layers..."}
+                  {exportProgress >= 95 && "Finalizing high-definition codec & writing video file..."}
+                </p>
+
+                {/* Main Progress Indicator */}
+                <div className="w-full bg-[#18181c] rounded-full h-2.5 p-[2px] border border-white/5 mb-4">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 rounded-full shadow-[0_0_10px_rgba(99,102,241,0.4)]"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${exportProgress}%` }}
+                    transition={{ ease: "easeOut" }}
+                  />
+                </div>
+
+                <div className="flex justify-between w-full text-zinc-400 text-[11px] font-mono mb-6 px-1">
+                  <span>Render Status: ACTIVE</span>
+                  <span className="text-indigo-400 font-bold">{exportProgress}%</span>
+                </div>
+
+                {/* Specs breakdown card overlay */}
+                <div className="grid grid-cols-3 gap-2 w-full mt-2 bg-white/[0.02] border border-white/5 rounded-2xl p-3 text-left">
+                  <div>
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Resolution</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">{exportResolution} Ultra</div>
+                  </div>
+                  <div className="border-l border-white/5 pl-3">
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Accelerated</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">GPU Hybrid</div>
+                  </div>
+                  <div className="border-l border-white/5 pl-3">
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Format</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">
+                      {Capacitor.isNativePlatform() ? "MP4 / H264" : "WebM / Lossless"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Export Complete Overlay */}
-      {exportedVideoUrl && (
-        <div className="fixed inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 sm:p-8">
-          <div className="w-full max-w-xl bg-zinc-900 rounded-3xl p-6 border border-white/10 flex flex-col">
-            <h2 className="text-white font-bold text-xl mb-4 text-center">Export Complete</h2>
-            <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden mb-6 flex items-center justify-center">
-              <video 
-                src={exportedVideoUrl || undefined} 
-                controls 
-                autoPlay
-                className="w-full h-full object-contain" 
-              />
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3">
-              {Capacitor.isNativePlatform() ? (
-                <>
-                  <button
-                    onClick={saveVideoToGallery}
-                    disabled={isSavingToGallery}
-                    className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors disabled:opacity-50"
-                  >
-                    <Download size={18} />
-                    {isSavingToGallery ? "Saving to Gallery..." : "Save to Gallery"}
-                  </button>
-                  {navigator.share && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          if (!exportedVideoBlob) return;
-                          const file = new File([exportedVideoBlob], `project-${Date.now()}.mp4`, { type: 'video/mp4' });
-                          await navigator.share({
-                            files: [file],
-                            title: 'My Video Project',
-                          });
-                        } catch (err) {
-                          console.warn("Share failed", err);
-                        }
-                      }}
-                      className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors"
-                    >
-                      <Share size={18} />
-                      Share Video
-                    </button>
+      <AnimatePresence>
+        {exportedVideoUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex items-center justify-center p-4 sm:p-8 overflow-y-auto"
+          >
+            <motion.div
+              initial={{ scale: 0.93, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.93, y: 30 }}
+              transition={{ type: "spring", damping: 28, stiffness: 150 }}
+              className="w-full max-w-4xl bg-[#0c0c0e]/95 border border-white/10 rounded-[36px] overflow-hidden shadow-[0_24px_100px_rgba(0,0,0,0.95)] flex flex-col md:flex-row p-6 gap-6 my-auto"
+            >
+              {/* Left video preview panel */}
+              <div className="flex-1 flex flex-col justify-center bg-black/60 rounded-3xl overflow-hidden border border-white/5 relative aspect-video md:aspect-auto md:min-h-[380px] group shadow-inner">
+                <video
+                  src={exportedVideoUrl || undefined}
+                  controls
+                  autoPlay
+                  className="w-full h-full object-contain relative z-10"
+                />
+                
+                {/* Cyberpunk corner details for premium theme */}
+                <div className="absolute top-4 left-4 z-20 pointer-events-none flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[9px] font-mono tracking-wider text-purple-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                  PREVIEW STAGE
+                </div>
+              </div>
+
+              {/* Right content controls & download info panel */}
+              <div className="w-full md:w-[360px] flex flex-col justify-between pt-2">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[10px] sm:text-[11px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white px-3 py-1 rounded-full font-bold tracking-widest uppercase shadow-md">
+                      Mastered
+                    </span>
+                    <span className="text-zinc-500 text-[11px] font-semibold font-mono">
+                      v2.4 Render Build
+                    </span>
+                  </div>
+
+                  <h2 className="text-white font-medium text-2xl tracking-tight mb-4">
+                    Compilation Succeeded
+                  </h2>
+
+                  {/* Metal specs grid */}
+                  <div className="space-y-3 mb-6">
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Export Destination</span>
+                      <span className="text-zinc-300 text-xs font-mono font-semibold">
+                        {Capacitor.isNativePlatform() ? "Device Photos Gallery" : "Browser Downloads"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Render Codec</span>
+                      <span className="text-zinc-300 text-xs font-mono font-semibold">
+                        {Capacitor.isNativePlatform() ? "MP4 (H.264 High)" : "VP9 (High Quality)"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Frame Resolution</span>
+                      <span className="text-emerald-400 text-xs font-mono font-bold">
+                        {exportResolution} Ultra (Mastered)
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Render Profile</span>
+                      <span className="text-purple-300 text-xs font-semibold">
+                        Lossless Standard Mix
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Toast/Tips container */}
+                  <div className="bg-white/[0.01] border border-white/[0.04] p-3.5 rounded-2xl flex gap-2.5 mb-6 text-zinc-400 text-[11px] sm:text-xs leading-relaxed">
+                    <Sparkles size={16} className="text-purple-400 shrink-0 mt-0.5" />
+                    <div>
+                      Your high-resolution video file is fully authored and ready to be downloaded or persisted in your gallery.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  {Capacitor.isNativePlatform() ? (
+                    <>
+                      <button
+                        onClick={saveVideoToGallery}
+                        disabled={isSavingToGallery}
+                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer disabled:opacity-50"
+                      >
+                        <Download size={16} className={isSavingToGallery ? "animate-bounce" : ""} />
+                        {isSavingToGallery ? "Writing Album Assets..." : "Save directly to Photos Gallery"}
+                      </button>
+
+                      {navigator.share && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              if (!exportedVideoBlob) return;
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.mp4`, { type: 'video/mp4' });
+                              await navigator.share({
+                                files: [file],
+                                title: 'My Video Project',
+                              });
+                            } catch (err) {
+                              console.warn("Share failed", err);
+                            }
+                          }}
+                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/5 py-3 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                        >
+                          <Share size={16} />
+                          Share Mastered Video File
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => {
+                          const a = document.createElement("a");
+                          a.href = exportedVideoUrl;
+                          a.download = `project-${exportResolution}-${Date.now()}.webm`;
+                          a.click();
+                          showToast("Video downloaded.");
+                        }}
+                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer"
+                      >
+                        <Download size={16} />
+                        Download Mastered Output
+                      </button>
+
+                      {navigator.share && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              if (!exportedVideoBlob) return;
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.webm`, { type: 'video/webm' });
+                              await navigator.share({
+                                files: [file],
+                                title: 'My Video Project',
+                              });
+                            } catch (err) {
+                              console.warn("Share failed", err);
+                            }
+                          }}
+                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/15 py-3 rounded-2xl font-bold text-white text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                        >
+                          <Share size={16} />
+                          Share Rendered Clip
+                        </button>
+                      )}
+                    </>
                   )}
-                </>
-              ) : (
-                <>
+
                   <button
                     onClick={() => {
-                      const a = document.createElement("a");
-                      a.href = exportedVideoUrl;
-                      a.download = `project-${exportResolution}-${Date.now()}.webm`;
-                      a.click();
-                      showToast("Video downloaded.");
+                      setExportedVideoUrl(null);
+                      URL.revokeObjectURL(exportedVideoUrl);
                     }}
-                    className="flex-1 bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-200 transition-colors"
+                    className="w-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/5 py-3 rounded-2xl font-medium text-xs text-zinc-400 hover:text-white transition-colors cursor-pointer"
                   >
-                    <Download size={18} />
-                    Save to Device
+                    Close & Return to Studio
                   </button>
-                  {navigator.share && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          if (!exportedVideoBlob) return;
-                          const file = new File([exportedVideoBlob], `project-${Date.now()}.webm`, { type: 'video/webm' });
-                          await navigator.share({
-                            files: [file],
-                            title: 'My Video Project',
-                          });
-                        } catch (err) {
-                          console.warn("Share failed", err);
-                        }
-                      }}
-                      className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors"
-                    >
-                      <Share size={18} />
-                      Share / Save to Gallery
-                    </button>
-                  )}
-                </>
-              )}
-              <button
-                onClick={() => {
-                  setExportedVideoUrl(null);
-                  URL.revokeObjectURL(exportedVideoUrl);
-                }}
-                className="flex-1 bg-zinc-800 text-white py-3 rounded-xl font-bold hover:bg-zinc-700 transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Top Header */}
       <header className="flex justify-between items-center px-4 py-4 shrink-0 relative z-[100] pointer-events-none">
@@ -4053,7 +4465,15 @@ const renderEditor = () => (
           </div>
         </div>
           
-        <div className="flex items-center pointer-events-auto">
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <button
+            onClick={toggleFullscreen}
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-zinc-800 border border-white/5 hover:bg-zinc-700 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
+            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+          
           <div className="relative">
             <button
               onClick={() => setIsExportExpanded(!isExportExpanded)}
@@ -4209,18 +4629,23 @@ const renderEditor = () => (
                       maskType?: string,
                       maskWidth: number = 60,
                       maskHeight: number = 60,
-                      maskRoundness: number = 15
+                      maskRoundness: number = 15,
+                      maskPositionX: number = 0.5,
+                      maskPositionY: number = 0.5
                     ) => {
                       switch (maskType) {
                         case "circle":
-                          return `ellipse(${maskWidth / 2}% ${maskHeight / 2}% at 50% 50%)`;
+                          return `ellipse(${maskWidth / 2}% ${maskHeight / 2}% at ${maskPositionX * 100}% ${maskPositionY * 100}%)`;
                         case "square": {
-                          const topBottom = (100 - maskHeight) / 2;
-                          const leftRight = (100 - maskWidth) / 2;
-                          return `inset(${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% ${Math.max(0, topBottom)}% ${Math.max(0, leftRight)}% round ${maskRoundness}px)`;
+                          const top = (maskPositionY * 100) - (maskHeight / 2);
+                          const bottom = 100 - ((maskPositionY * 100) + (maskHeight / 2));
+                          const left = (maskPositionX * 100) - (maskWidth / 2);
+                          const right = 100 - ((maskPositionX * 100) + (maskWidth / 2));
+                          return `inset(${Math.max(0, top)}% ${Math.max(0, right)}% ${Math.max(0, bottom)}% ${Math.max(0, left)}% round ${maskRoundness}px)`;
                         }
-                        case "half":
-                          return `inset(0% 0% ${100 - maskHeight}% 0%)`;
+                        case "half": {
+                          return `inset(0% 0% ${100 - (maskPositionY * 100)}% 0%)`;
+                        }
                         default:
                           return "none";
                       }
@@ -4230,7 +4655,9 @@ const renderEditor = () => (
                       activeClip.maskType,
                       activeClip.maskWidth,
                       activeClip.maskHeight,
-                      activeClip.maskRoundness
+                      activeClip.maskRoundness,
+                      activeClip.maskPositionX ?? 0.5,
+                      activeClip.maskPositionY ?? 0.5
                     );
 
                     // Apply wipe transitions on incoming clip
@@ -4411,6 +4838,7 @@ const renderEditor = () => (
                                   <MaskControlOverlay
                                     clip={activeClip}
                                     updateClipsProperties={updateClipsProperties}
+                                    onShowAdjustments={() => setShowFloatingMaskAdjust(true)}
                                   />
                                 )}
                               </div>
@@ -4534,6 +4962,7 @@ const renderEditor = () => (
                                    <MaskControlOverlay
                                      clip={activeClip}
                                      updateClipsProperties={updateClipsProperties}
+                                     onShowAdjustments={() => setShowFloatingMaskAdjust(true)}
                                    />
                                  )}
                                </div>
@@ -4839,8 +5268,8 @@ const renderEditor = () => (
         >
           <div className="flex min-h-full min-w-max relative w-[fit-content]">
             {/* Left Layer Control Panel */}
-            <div className="w-[100px] shrink-0 flex flex-col border-r border-white/5 bg-[#171719] z-[70] sticky left-0 pb-[200px] shadow-[2px_0_10px_rgba(0,0,0,0.2)]">
-              <div className="text-[9px] uppercase tracking-widest text-zinc-500 font-bold sticky top-0 w-full z-[80] bg-[#171719] h-[20px] flex items-center justify-between px-2 border-b border-white/5 shrink-0 shadow-[0_4px_10px_rgba(0,0,0,0.2)]">
+            <div className="w-[100px] shrink-0 flex flex-col border-r border-white/10 bg-black/5 backdrop-blur-xl z-[70] sticky left-0 pb-[200px] shadow-[4px_0_15px_rgba(0,0,0,0.3)]">
+              <div className="text-[9px] uppercase tracking-widest text-zinc-300 font-extrabold sticky top-0 w-full z-[80] bg-black/15 backdrop-blur-md h-[20px] flex items-center justify-between px-2 border-b border-white/10 shrink-0 shadow-[0_2px_8px_rgba(0,0,0,0.2)]">
                 <span>Layers</span>
                 <button
                   onClick={() => setIsCompactMode(prev => !prev)}
@@ -4857,7 +5286,7 @@ const renderEditor = () => (
                   return (
                     <div
                       key={layer.id}
-                      className={`${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} flex flex-col items-center justify-center shrink-0 border-b group py-0.5 relative transition-all duration-200 transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/15 border-indigo-500/40 scale-[1.02] z-50 shadow-[0_8px_20px_rgba(0,0,0,0.6)]" : "bg-[#0d0d0f]/60 hover:bg-[#121214]/80 border-white/[0.03] backdrop-blur-sm z-10"}`}
+                      className={`${isCompactMode ? "h-[22px] sm:h-[26px]" : "h-[32px] sm:h-[38px]"} flex flex-col items-center justify-center shrink-0 border-b group py-0.5 relative transition-all duration-200 transform-gpu ${draggingLayerId === layer.id ? "bg-indigo-500/15 border-indigo-500/40 scale-[1.02] z-50 shadow-[0_8px_20px_rgba(0,0,0,0.6)]" : "bg-white/[0.01] hover:bg-white/[0.04] border-white/5 z-10"}`}
                     >
                       {/* Cosmetic Track Badge Indicator */}
                       <span className="absolute top-1 left-2 pointer-events-none font-mono text-[7px] text-zinc-500/80 font-bold uppercase tracking-wider scale-90 sm:scale-100 origin-left">
@@ -7306,75 +7735,12 @@ const renderEditor = () => (
                     if (!activeClip || !activeClip.maskType || activeClip.maskType === "none") return null;
 
                     return (
-                      <>
-                        <div className="mt-2 text-center">
-                          <button
-                            onClick={() => setMaskAdjustOpen(!maskAdjustOpen)}
-                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[9px] font-semibold tracking-wider uppercase transition-all border ${maskAdjustOpen ? "bg-purple-600/20 text-[#c084fc] border-purple-500/30" : "bg-zinc-800 text-zinc-400 border-white/5 hover:text-white"}`}
-                          >
-                            <SlidersHorizontal size={10} />
-                            {maskAdjustOpen ? "Hide Options" : "Adjust Settings"}
-                          </button>
-                        </div>
-
-                        {maskAdjustOpen && (
-                          <div className="flex flex-col gap-1.5 px-2.5 mt-2 border-t border-white/5 pt-2 max-h-[160px] overflow-y-auto scrollbar-hide">
-                            {/* Width Slider (except Half) */}
-                            {activeClip.maskType !== "half" && (
-                              <CompactRulerControl
-                                label="Width"
-                                value={activeClip.maskWidth ?? 60}
-                                onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: val }); }}
-                                onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskWidth: 60 }); }}
-                                min={5} max={100} step={1} unit="%" sensitivity={1}
-                                hideTicks
-                              />
-                            )}
-
-                            {/* Height / Position Slider */}
-                            <CompactRulerControl
-                              label={activeClip.maskType === "half" ? "Split Height" : "Height"}
-                              value={activeClip.maskHeight ?? (activeClip.maskType === "half" ? 50 : 60)}
-                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: val }); }}
-                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskHeight: activeClip.maskType === "half" ? 50 : 60 }); }}
-                              min={activeClip.maskType === "half" ? 0 : 5} max={100} step={1} unit="%" sensitivity={1}
-                              hideTicks
-                            />
-
-                            {/* Corner Roundness (Square only) */}
-                            {activeClip.maskType === "square" && (
-                              <CompactRulerControl
-                                label="Roundness"
-                                value={activeClip.maskRoundness ?? 15}
-                                onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: val }); }}
-                                onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskRoundness: 15 }); }}
-                                min={0} max={100} step={1} unit="px" sensitivity={1}
-                                hideTicks
-                              />
-                            )}
-
-                            {/* Feather Slider */}
-                            <CompactRulerControl
-                              label="Feather"
-                              value={activeClip.maskFeather ?? 0}
-                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: val }); }}
-                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskFeather: 0 }); }}
-                              min={0} max={200} step={1} unit="px" sensitivity={1}
-                              hideTicks
-                            />
-
-                            {/* Expansion Slider */}
-                            <CompactRulerControl
-                              label="Expansion"
-                              value={activeClip.maskExpansion ?? 0}
-                              onChange={(val) => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: val }); }}
-                              onReset={() => { if (selectedClipId) updateClipsProperties([selectedClipId], { maskExpansion: 0 }); }}
-                              min={-200} max={200} step={1} unit="px" sensitivity={1}
-                              hideTicks
-                            />
-                          </div>
-                        )}
-                      </>
+                      <div className="mt-4 px-2 py-2.5 rounded-xl bg-purple-500/5 border border-purple-500/10 text-center transition-all">
+                        <span className="text-[10px] text-zinc-300 font-medium select-none flex items-center justify-center gap-1.5 leading-normal pr-1.5">
+                          <Sparkles className="text-purple-400 w-3.5 h-3.5 shrink-0 animate-pulse" />
+                          <span>Hold / Long-tap the mask shape on preview screen to open adjustment sliders</span>
+                        </span>
+                      </div>
                     );
                   })()}
                 </motion.div>

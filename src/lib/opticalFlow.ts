@@ -16,7 +16,7 @@ export interface SmoothSlowMotionPlugin {
     height: number;
     fps: number;
   }>;
-  decodeAllFrames(options: { inputPath: string }): Promise<{
+  decodeAllFrames(options: { inputPath: string; speed?: number }): Promise<{
     success: boolean;
     decodedFramesCount: number;
     flowComputedCount?: number;
@@ -33,6 +33,7 @@ export interface SmoothSlowMotionPlugin {
     averagePsnr?: number;
     averageWarpError?: number;
     interpolationVisualization?: string;
+    outputPath?: string;
   }>;
 }
 
@@ -185,19 +186,41 @@ export async function processSmoothSlowMoBrowser(
       inputPath: rawInput
     });
     console.log("Plugin verified receiveVideoPath returning:", result);
-    onProgress(30);
+    onProgress(15);
+
+    // Setup dynamic listener for precise native progress callbacks
+    let progressListener: any = null;
+    try {
+      progressListener = await (SmoothSlowMotionNative as any).addListener("progress", (data: { progress: number }) => {
+        onProgress(data.progress);
+      });
+      console.log("Successfully attached progress listener to SmoothSlowMotion plugin");
+    } catch (listenerError) {
+      console.warn("Could not register progress callback listener:", listenerError);
+    }
 
     // 2. Decode all frames and verify timestamps
     console.log("Invoking native decodeAllFrames pipeline for timestamp verification...");
     const decodeResult = await SmoothSlowMotionNative.decodeAllFrames({
-      inputPath: rawInput
+      inputPath: rawInput,
+      speed: speedFactor
     });
     console.log("Native decoding and timestamp verification completed successfully:", decodeResult);
+
+    // Clean up active listener
+    if (progressListener) {
+      try {
+        await progressListener.remove();
+      } catch (remError) {
+        console.warn("Could not remove progress listener:", remError);
+      }
+    }
     onProgress(100);
 
-    const url = typeof videoBlobUrlOrBlob === "string" 
-      ? videoBlobUrlOrBlob 
-      : URL.createObjectURL(videoBlobUrlOrBlob);
+    const resolvedPath = decodeResult.outputPath;
+    const url = resolvedPath
+      ? Capacitor.convertFileSrc("file://" + resolvedPath)
+      : (typeof videoBlobUrlOrBlob === "string" ? videoBlobUrlOrBlob : URL.createObjectURL(videoBlobUrlOrBlob));
 
     return {
       url,

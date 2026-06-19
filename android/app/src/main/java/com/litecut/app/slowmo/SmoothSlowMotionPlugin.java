@@ -4,6 +4,9 @@ import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
+import android.media.MediaCodecInfo;
+import android.media.MediaMuxer;
+import android.media.Image;
 import android.util.Log;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -14,6 +17,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Core;
@@ -207,6 +211,14 @@ public class SmoothSlowMotionPlugin extends Plugin {
             Log.i(TAG, "OpenCV initialization succeeded!");
         }
 
+        double speed = call.getDouble("speed", 0.5);
+        if (speed <= 0.0 || speed > 1.0) {
+            speed = 0.5;
+        }
+        long durationUs = 0;
+        String outputPath = null;
+        VideoEncoderCore encoderCore = null;
+
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec decoder = null;
         
@@ -268,6 +280,10 @@ public class SmoothSlowMotionPlugin extends Plugin {
             decoder = MediaCodec.createDecoderByType(mime);
             decoder.configure(format, null, null, 0);
             decoder.start();
+
+            if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                durationUs = format.getLong(MediaFormat.KEY_DURATION);
+            }
 
             MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
             boolean isInputEOS = false;
@@ -374,6 +390,50 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                     outputBuffer.position(startPos);
                                     outputBuffer.get(rowData, 0, width);
                                     currMat.put(r, 0, rowData);
+                                }
+                            }
+
+                            // Initialize VideoEncoderCore once width & height are known
+                            if (encoderCore == null && width > 0 && height > 0) {
+                                try {
+                                    int inputFps = 30;
+                                    if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+                                        try {
+                                            inputFps = format.getInteger(MediaFormat.KEY_FRAME_RATE);
+                                        } catch (Exception e1) {
+                                            try {
+                                                inputFps = (int) Math.round(format.getFloat(MediaFormat.KEY_FRAME_RATE));
+                                            } catch (Exception ignored) {}
+                                        }
+                                    }
+                                    File cacheDir = getContext().getCacheDir();
+                                    File outputFile = new File(cacheDir, "slowmo_output_" + System.currentTimeMillis() + ".mp4");
+                                    outputPath = outputFile.getAbsolutePath();
+                                    encoderCore = new VideoEncoderCore(outputPath, width, height, inputFps);
+                                    Log.i(TAG, "Initialized VideoEncoderCore with output path: " + outputPath);
+                                } catch (Exception encInitErr) {
+                                    Log.e(TAG, "Failed to initialize encoderCore: " + encInitErr.getMessage(), encInitErr);
+                                }
+                            }
+
+                            // Output Progress Callback
+                            if (durationUs > 0) {
+                                int percentage = (int) Math.round((pts * 100.0) / durationUs);
+                                percentage = Math.max(0, Math.min(99, percentage));
+                                if (frameCount % 6 == 0) {
+                                    JSObject progressData = new JSObject();
+                                    progressData.put("progress", percentage);
+                                    notifyListeners("progress", progressData);
+                                }
+                            }
+
+                            // Write the first original frame directly to encoder
+                            if (frameCount == 1 && encoderCore != null) {
+                                try {
+                                    long outputPts = (long) (pts * (1.0 / speed));
+                                    encoderCore.encodeFrame(currMat, outputPts);
+                                } catch (Exception encodeErr) {
+                                    Log.e(TAG, "Failed encoding first frame: " + encodeErr.getMessage(), encodeErr);
                                 }
                             }
                             
@@ -526,6 +586,20 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                 } catch (Exception flowErr) {
                                     Log.e(TAG, "Failed to calculate/verify/visualize DIS Optical Flow on frame " + frameCount + ": " + flowErr.getMessage());
                                 }
+
+                                // Today's Work: Write reconstructed interpolated and original frames sequentially to encoder
+                                if (encoderCore != null) {
+                                    try {
+                                        long ptsPrev = timestamps.get(frameCount - 2);
+                                        long outputPtsIntermediate = (long) (((ptsPrev + pts) / 2.0) * (1.0 / speed));
+                                        long outputPts = (long) (pts * (1.0 / speed));
+
+                                        encoderCore.encodeFrame(intermediateFrame, outputPtsIntermediate);
+                                        encoderCore.encodeFrame(currMat, outputPts);
+                                    } catch (Exception encodeErr) {
+                                        Log.e(TAG, "Failed encoding intermediate/current frames on frame " + frameCount + ": " + encodeErr.getMessage(), encodeErr);
+                                    }
+                                }
                             }
                         }
                     }
@@ -539,6 +613,15 @@ public class SmoothSlowMotionPlugin extends Plugin {
                     stride = newFormat.containsKey(MediaFormat.KEY_STRIDE) ? newFormat.getInteger(MediaFormat.KEY_STRIDE) : width;
                 } else if (outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                     // No output buffer available, wait or loop
+                }
+            }
+
+            if (encoderCore != null) {
+                try {
+                    encoderCore.signalEndOfStream();
+                    Log.i(TAG, "Successfully signaled End Of Stream to encoderCore.");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to signal EOS to encoderCore: " + e.getMessage(), e);
                 }
             }
 
@@ -563,6 +646,9 @@ public class SmoothSlowMotionPlugin extends Plugin {
             result.put("averagePsnr", averagePsnr);
             result.put("averageWarpError", averageWarpError);
             result.put("interpolationVisualization", bestInterpolationVisualizationBase64);
+            if (outputPath != null) {
+                result.put("outputPath", outputPath);
+            }
 
             JSArray tsArray = new JSArray();
             int sampleStep = Math.max(1, timestamps.size() / 20);
@@ -627,8 +713,169 @@ public class SmoothSlowMotionPlugin extends Plugin {
                 }
             } catch (Exception ignored) {}
             try {
+                if (encoderCore != null) {
+                    encoderCore.release();
+                }
+            } catch (Exception ignored) {}
+            try {
                 extractor.release();
             } catch (Exception ignored) {}
+        }
+    }
+
+    // Today's Work: MediaCodec H.264 Video Encoder + MediaMuxer Wrapper.
+    private static class VideoEncoderCore {
+        private MediaCodec mEncoder;
+        private MediaMuxer mMuxer;
+        private int mTrackIndex = -1;
+        private boolean mMuxerStarted = false;
+        private MediaCodec.BufferInfo mBufferInfo;
+        private int mWidth;
+        private int mHeight;
+        private int mFps;
+
+        public VideoEncoderCore(String outputPath, int width, int height, int fps) throws Exception {
+            mWidth = width;
+            mHeight = height;
+            mFps = fps;
+            mBufferInfo = new MediaCodec.BufferInfo();
+
+            MediaFormat format = MediaFormat.createVideoFormat("video/avc", width, height);
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, width * height * 5); // Multiplier for visual quality
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+
+            mEncoder = MediaCodec.createEncoderByType("video/avc");
+            mEncoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            mEncoder.start();
+
+            mMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+        }
+
+        public void encodeFrame(Mat mat, long ptsUs) throws Exception {
+            int inputBufferIndex = mEncoder.dequeueInputBuffer(10000); // 10ms timeout
+            if (inputBufferIndex >= 0) {
+                Image image = mEncoder.getInputImage(inputBufferIndex);
+                if (image != null) {
+                    Image.Plane[] planes = image.getPlanes();
+                    ByteBuffer yBuffer = planes[0].getBuffer();
+                    ByteBuffer uBuffer = planes[1].getBuffer();
+                    ByteBuffer vBuffer = planes[2].getBuffer();
+
+                    int yRowStride = planes[0].getRowStride();
+                    int uRowStride = planes[1].getRowStride();
+                    int vRowStride = planes[2].getRowStride();
+                    int uPixelStride = planes[1].getPixelStride();
+                    int vPixelStride = planes[2].getPixelStride();
+
+                    int width = mWidth;
+                    int height = mHeight;
+
+                    // Copy Y plane (grayscale)
+                    byte[] rowBuf = new byte[width];
+                    for (int r = 0; r < height; r++) {
+                        mat.get(r, 0, rowBuf);
+                        yBuffer.position(r * yRowStride);
+                        yBuffer.put(rowBuf);
+                    }
+
+                    // Copy U & V planes (neutral grayscale = 128)
+                    int uvWidth = width / 2;
+                    int uvHeight = height / 2;
+                    
+                    for (int r = 0; r < uvHeight; r++) {
+                        int uRowStart = r * uRowStride;
+                        for (int c = 0; c < uvWidth; c++) {
+                            uBuffer.put(uRowStart + c * uPixelStride, (byte) 128);
+                        }
+                        int vRowStart = r * vRowStride;
+                        for (int c = 0; c < uvWidth; c++) {
+                            vBuffer.put(vRowStart + c * vPixelStride, (byte) 128);
+                        }
+                    }
+
+                    image.close();
+                }
+                mEncoder.queueInputBuffer(inputBufferIndex, 0, mWidth * mHeight * 3 / 2, ptsUs, 0);
+            }
+
+            drainEncoder(false);
+        }
+
+        public void signalEndOfStream() throws Exception {
+            int inputBufferIndex = mEncoder.dequeueInputBuffer(10000);
+            if (inputBufferIndex >= 0) {
+                mEncoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            }
+            drainEncoder(true);
+        }
+
+        private void drainEncoder(boolean endOfStream) throws Exception {
+            final int TIMEOUT_USEC = 10000;
+            while (true) {
+                int encoderStatus = mEncoder.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
+                if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (!endOfStream) {
+                        break; // wait for more frames
+                    }
+                } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (mMuxerStarted) {
+                        throw new RuntimeException("Encoder output format changed twice");
+                    }
+                    MediaFormat newFormat = mEncoder.getOutputFormat();
+                    mTrackIndex = mMuxer.addTrack(newFormat);
+                    mMuxer.start();
+                    mMuxerStarted = true;
+                } else if (encoderStatus < 0) {
+                    // Ignore other statuses
+                } else {
+                    ByteBuffer encodedData = mEncoder.getOutputBuffer(encoderStatus);
+                    if (encodedData == null) {
+                        throw new RuntimeException("Encoder output buffer flat layout");
+                    }
+
+                    if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        mBufferInfo.size = 0;
+                    }
+
+                    if (mBufferInfo.size != 0) {
+                        if (!mMuxerStarted) {
+                            throw new RuntimeException("Muxer hasn't started");
+                        }
+                        encodedData.position(mBufferInfo.offset);
+                        encodedData.limit(mBufferInfo.offset + mBufferInfo.size);
+                        mMuxer.writeSampleData(mTrackIndex, encodedData, mBufferInfo);
+                    }
+
+                    mEncoder.releaseOutputBuffer(encoderStatus, false);
+
+                    if ((mBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        break; // EOF reached
+                    }
+                }
+            }
+        }
+
+        public void release() {
+            if (mEncoder != null) {
+                try {
+                    mEncoder.stop();
+                } catch (Exception ignored) {}
+                try {
+                    mEncoder.release();
+                } catch (Exception ignored) {}
+                mEncoder = null;
+            }
+            if (mMuxer != null) {
+                try {
+                    mMuxer.stop();
+                } catch (Exception ignored) {}
+                try {
+                    mMuxer.release();
+                } catch (Exception ignored) {}
+                mMuxer = null;
+            }
         }
     }
 }

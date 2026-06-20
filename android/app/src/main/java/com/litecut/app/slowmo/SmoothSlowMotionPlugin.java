@@ -340,6 +340,9 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         }
                         lastTimestampUs = pts;
 
+                        Mat currMat = null;
+                        Mat prevMat = null;
+
                         // Retrieve full color video frame using getOutputImage
                         Image image = decoder.getOutputImage(outputBufferIndex);
                         if (image != null) {
@@ -376,8 +379,8 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                 }
 
                                 // Pick target Mat alternating based on frameCount
-                                Mat currMat = (frameCount % 2 == 1) ? matA : matB;
-                                Mat prevMat = (frameCount % 2 == 1) ? matB : matA;
+                                currMat = (frameCount % 2 == 1) ? matA : matB;
+                                prevMat = (frameCount % 2 == 1) ? matB : matA;
 
                                 // Convert decoded frame to BGR color space
                                 Mat bgrMat = convertYUVImageToBGR(image);

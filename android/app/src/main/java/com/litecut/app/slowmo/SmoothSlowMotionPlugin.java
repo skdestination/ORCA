@@ -340,57 +340,51 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         }
                         lastTimestampUs = pts;
 
-                        // Retrieve Y plane directly for grayscale conversion
-                        ByteBuffer outputBuffer = decoder.getOutputBuffer(outputBufferIndex);
-                        if (outputBuffer != null) {
-                            outputBuffer.position(bufferInfo.offset);
-                            
-                            // Reinitialize preallocated Mats dynamically if dimension changes or at start
-                            if (matA == null || matA.cols() != width || matA.rows() != height) {
-                                if (matA != null) matA.release();
-                                if (matB != null) matB.release();
-                                if (flowMat != null) flowMat.release();
-                                
-                                if (mapAx != null) mapAx.release();
-                                if (mapAy != null) mapAy.release();
-                                if (mapBx != null) mapBx.release();
-                                if (mapBy != null) mapBy.release();
-                                if (warpedA != null) warpedA.release();
-                                if (warpedB != null) warpedB.release();
-                                if (intermediateFrame != null) intermediateFrame.release();
-                                if (diffMat != null) diffMat.release();
-                                if (squareDiff != null) squareDiff.release();
+                        // Retrieve full color video frame using getOutputImage
+                        Image image = decoder.getOutputImage(outputBufferIndex);
+                        if (image != null) {
+                            try {
+                                // Reinitialize preallocated Mats dynamically if dimension changes or at start
+                                if (matA == null || matA.cols() != width || matA.rows() != height) {
+                                    if (matA != null) matA.release();
+                                    if (matB != null) matB.release();
+                                    if (flowMat != null) flowMat.release();
+                                    
+                                    if (mapAx != null) mapAx.release();
+                                    if (mapAy != null) mapAy.release();
+                                    if (mapBx != null) mapBx.release();
+                                    if (mapBy != null) mapBy.release();
+                                    if (warpedA != null) warpedA.release();
+                                    if (warpedB != null) warpedB.release();
+                                    if (intermediateFrame != null) intermediateFrame.release();
+                                    if (diffMat != null) diffMat.release();
+                                    if (squareDiff != null) squareDiff.release();
 
-                                matA = new Mat(height, width, CvType.CV_8UC1);
-                                matB = new Mat(height, width, CvType.CV_8UC1);
-                                flowMat = new Mat();
-                                
-                                mapAx = new Mat(height, width, CvType.CV_32FC1);
-                                mapAy = new Mat(height, width, CvType.CV_32FC1);
-                                mapBx = new Mat(height, width, CvType.CV_32FC1);
-                                mapBy = new Mat(height, width, CvType.CV_32FC1);
-                                warpedA = new Mat(height, width, CvType.CV_8UC1);
-                                warpedB = new Mat(height, width, CvType.CV_8UC1);
-                                intermediateFrame = new Mat(height, width, CvType.CV_8UC1);
-                                diffMat = new Mat();
-                                squareDiff = new Mat();
-                            }
-                            
-                            if (rowData == null || rowData.length != width) {
-                                rowData = new byte[width];
-                            }
-                            
-                            // Pick target Mat alternating based on frameCount
-                            Mat currMat = (frameCount % 2 == 1) ? matA : matB;
-                            Mat prevMat = (frameCount % 2 == 1) ? matB : matA;
-
-                            for (int r = 0; r < height; r++) {
-                                int startPos = bufferInfo.offset + r * stride;
-                                if (startPos + width <= outputBuffer.limit()) {
-                                    outputBuffer.position(startPos);
-                                    outputBuffer.get(rowData, 0, width);
-                                    currMat.put(r, 0, rowData);
+                                    matA = new Mat(height, width, CvType.CV_8UC3);
+                                    matB = new Mat(height, width, CvType.CV_8UC3);
+                                    flowMat = new Mat();
+                                    
+                                    mapAx = new Mat(height, width, CvType.CV_32FC1);
+                                    mapAy = new Mat(height, width, CvType.CV_32FC1);
+                                    mapBx = new Mat(height, width, CvType.CV_32FC1);
+                                    mapBy = new Mat(height, width, CvType.CV_32FC1);
+                                    warpedA = new Mat(height, width, CvType.CV_8UC3);
+                                    warpedB = new Mat(height, width, CvType.CV_8UC3);
+                                    intermediateFrame = new Mat(height, width, CvType.CV_8UC3);
+                                    diffMat = new Mat();
+                                    squareDiff = new Mat();
                                 }
+
+                                // Pick target Mat alternating based on frameCount
+                                Mat currMat = (frameCount % 2 == 1) ? matA : matB;
+                                Mat prevMat = (frameCount % 2 == 1) ? matB : matA;
+
+                                // Convert decoded frame to BGR color space
+                                Mat bgrMat = convertYUVImageToBGR(image);
+                                bgrMat.copyTo(currMat);
+                                bgrMat.release();
+                            } finally {
+                                image.close();
                             }
 
                             // Initialize VideoEncoderCore once width & height are known
@@ -440,7 +434,13 @@ public class SmoothSlowMotionPlugin extends Plugin {
                             // On second frame onwards, run DIS Dense Optical Flow
                             if (frameCount > 1) {
                                 try {
-                                    disFlow.calc(prevMat, currMat, flowMat);
+                                    Mat prevGray = new Mat();
+                                    Mat currGray = new Mat();
+                                    Imgproc.cvtColor(prevMat, prevGray, Imgproc.COLOR_BGR2GRAY);
+                                    Imgproc.cvtColor(currMat, currGray, Imgproc.COLOR_BGR2GRAY);
+                                    disFlow.calc(prevGray, currGray, flowMat);
+                                    prevGray.release();
+                                    currGray.release();
                                     flowComputedCount++;
                                     
                                     // Verify optical flow correctness & extract stats
@@ -519,12 +519,12 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                     // 4. Compare original vs interpolated (warp alignment error metric & PSNR score)
                                     Core.absdiff(warpedA, warpedB, diffMat);
                                     Scalar meanDiff = Core.mean(diffMat);
-                                    double localWarpError = meanDiff.val[0];
+                                    double localWarpError = (meanDiff.val[0] + meanDiff.val[1] + meanDiff.val[2]) / 3.0;
                                     sumWarpError += localWarpError;
 
                                     Core.multiply(diffMat, diffMat, squareDiff);
                                     Scalar meanSquareDiff = Core.mean(squareDiff);
-                                    double localMse = meanSquareDiff.val[0];
+                                    double localMse = (meanSquareDiff.val[0] + meanSquareDiff.val[1] + meanSquareDiff.val[2]) / 3.0;
                                     double localPsnr = (localMse > 0) ? (10.0 * Math.log10((255.0 * 255.0) / localMse)) : 99.0;
                                     sumPsnr += localPsnr;
 
@@ -533,11 +533,8 @@ public class SmoothSlowMotionPlugin extends Plugin {
                                         peakAvgFlowMagnitude = avgMag;
 
                                         // Create split-view visual validation card: [Original | Interpolated]
-                                        Mat leftBGR = new Mat();
-                                        Imgproc.cvtColor(prevMat, leftBGR, Imgproc.COLOR_GRAY2BGR);
-
-                                        Mat rightBGR = new Mat();
-                                        Imgproc.cvtColor(intermediateFrame, rightBGR, Imgproc.COLOR_GRAY2BGR);
+                                        Mat leftBGR = prevMat.clone();
+                                        Mat rightBGR = intermediateFrame.clone();
 
                                         // Annotate Left & Right Panes
                                         Imgproc.putText(leftBGR, "Original (Frame A)", new Point(15, 30),
@@ -723,6 +720,53 @@ public class SmoothSlowMotionPlugin extends Plugin {
         }
     }
 
+    private Mat convertYUVImageToBGR(Image image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        Image.Plane[] planes = image.getPlanes();
+        
+        Mat yuvMat = new Mat(height + height / 2, width, CvType.CV_8UC1);
+        
+        // Copy Y plane
+        ByteBuffer yBuf = planes[0].getBuffer();
+        int yRowStride = planes[0].getRowStride();
+        byte[] rowData = new byte[width];
+        for (int r = 0; r < height; r++) {
+            yBuf.position(r * yRowStride);
+            yBuf.get(rowData, 0, width);
+            yuvMat.put(r, 0, rowData);
+        }
+        
+        // Interleave U and V into NV21 layout
+        ByteBuffer uBuf = planes[1].getBuffer();
+        ByteBuffer vBuf = planes[2].getBuffer();
+        int uRowStride = planes[1].getRowStride();
+        int vRowStride = planes[2].getRowStride();
+        int uPixelStride = planes[1].getPixelStride();
+        int vPixelStride = planes[2].getPixelStride();
+        
+        int uvWidth = width / 2;
+        int uvHeight = height / 2;
+        byte[] uvBytes = new byte[uvWidth * uvHeight * 2];
+        
+        int idx = 0;
+        for (int r = 0; r < uvHeight; r++) {
+            int uRowStart = r * uRowStride;
+            int vRowStart = r * vRowStride;
+            for (int c = 0; c < uvWidth; c++) {
+                uvBytes[idx++] = vBuf.get(vRowStart + c * vPixelStride);
+                uvBytes[idx++] = uBuf.get(uRowStart + c * uPixelStride);
+            }
+        }
+        
+        yuvMat.put(height, 0, uvBytes);
+        
+        Mat bgrMat = new Mat();
+        Imgproc.cvtColor(yuvMat, bgrMat, Imgproc.COLOR_YUV2BGR_NV21);
+        yuvMat.release();
+        return bgrMat;
+    }
+
     // Today's Work: MediaCodec H.264 Video Encoder + MediaMuxer Wrapper.
     private static class VideoEncoderCore {
         private MediaCodec mEncoder;
@@ -753,7 +797,7 @@ public class SmoothSlowMotionPlugin extends Plugin {
             mMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
         }
 
-        public void encodeFrame(Mat mat, long ptsUs) throws Exception {
+        public void encodeFrame(Mat bgrMat, long ptsUs) throws Exception {
             int inputBufferIndex = mEncoder.dequeueInputBuffer(10000); // 10ms timeout
             if (inputBufferIndex >= 0) {
                 Image image = mEncoder.getInputImage(inputBufferIndex);
@@ -772,28 +816,70 @@ public class SmoothSlowMotionPlugin extends Plugin {
                     int width = mWidth;
                     int height = mHeight;
 
-                    // Copy Y plane (grayscale)
-                    byte[] rowBuf = new byte[width];
+                    // Convert BGR Mat to YUV CV_8UC3 using OpenCV
+                    Mat yuvMat = new Mat();
+                    Imgproc.cvtColor(bgrMat, yuvMat, Imgproc.COLOR_BGR2YUV);
+
+                    // Split YUV into individual channels
+                    List<Mat> yuvChannels = new ArrayList<>();
+                    Core.split(yuvMat, yuvChannels);
+                    Mat yMat = yuvChannels.get(0);
+                    Mat uMatFull = yuvChannels.get(1);
+                    Mat vMatFull = yuvChannels.get(2);
+
+                    // Resize U & V to match downsampled chrominance sizes (W/2 x H/2)
+                    Mat uMat = new Mat();
+                    Mat vMat = new Mat();
+                    Imgproc.resize(uMatFull, uMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
+                    Imgproc.resize(vMatFull, vMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
+
+                    // Copy Y plane
+                    byte[] yRowBuf = new byte[width];
                     for (int r = 0; r < height; r++) {
-                        mat.get(r, 0, rowBuf);
+                        yMat.get(r, 0, yRowBuf);
                         yBuffer.position(r * yRowStride);
-                        yBuffer.put(rowBuf);
+                        yBuffer.put(yRowBuf);
                     }
 
-                    // Copy U & V planes (neutral grayscale = 128)
+                    // Copy U plane
                     int uvWidth = width / 2;
                     int uvHeight = height / 2;
-                    
+                    byte[] uRowBuf = new byte[uvWidth];
                     for (int r = 0; r < uvHeight; r++) {
-                        int uRowStart = r * uRowStride;
-                        for (int c = 0; c < uvWidth; c++) {
-                            uBuffer.put(uRowStart + c * uPixelStride, (byte) 128);
-                        }
-                        int vRowStart = r * vRowStride;
-                        for (int c = 0; c < uvWidth; c++) {
-                            vBuffer.put(vRowStart + c * vPixelStride, (byte) 128);
+                        uMat.get(r, 0, uRowBuf);
+                        uBuffer.position(r * uRowStride);
+                        if (uPixelStride == 1) {
+                            uBuffer.put(uRowBuf);
+                        } else {
+                            int rowStart = r * uRowStride;
+                            for (int c = 0; c < uvWidth; c++) {
+                                uBuffer.put(rowStart + c * uPixelStride, uRowBuf[c]);
+                            }
                         }
                     }
+
+                    // Copy V plane
+                    byte[] vRowBuf = new byte[uvWidth];
+                    for (int r = 0; r < uvHeight; r++) {
+                        vMat.get(r, 0, vRowBuf);
+                        vBuffer.position(r * vRowStride);
+                        if (vPixelStride == 1) {
+                            vBuffer.put(vRowBuf);
+                        } else {
+                            int rowStart = r * vRowStride;
+                            for (int c = 0; c < uvWidth; c++) {
+                                vBuffer.put(rowStart + c * vPixelStride, vRowBuf[c]);
+                            }
+                        }
+                    }
+
+                    // Clean up OpenCV mats to prevent native memory leaks
+                    yuvMat.release();
+                    yMat.release();
+                    uMatFull.release();
+                    vMatFull.release();
+                    uMat.release();
+                    vMat.release();
 
                     image.close();
                 }

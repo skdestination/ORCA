@@ -513,6 +513,26 @@ function ProjectCoverImage({ p }: { p: Project }) {
   );
 }
 
+const getBestSupportedVideoType = () => {
+  const types = [
+    { mime: "video/mp4;codecs=avc1", ext: "mp4" },
+    { mime: "video/mp4", ext: "mp4" },
+    { mime: "video/webm;codecs=h264", ext: "webm" },
+    { mime: "video/webm;codecs=vp9", ext: "webm" },
+    { mime: "video/webm;codecs=vp8", ext: "webm" },
+    { mime: "video/webm", ext: "webm" },
+  ];
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return { mime: "video/webm", ext: "webm" };
+  }
+  for (const t of types) {
+    if (MediaRecorder.isTypeSupported(t.mime)) {
+      return t;
+    }
+  }
+  return { mime: "video/webm", ext: "webm" };
+};
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1575,13 +1595,14 @@ export default function App() {
     const fps = parseInt(exportFps) || 30;
     const stream = canvas.captureStream(fps);
 
-    const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+    const bestType = getBestSupportedVideoType();
+    const recorder = new MediaRecorder(stream, { mimeType: bestType.mime });
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
     };
     recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: "video/webm" });
+      const blob = new Blob(chunks, { type: bestType.mime });
       const url = URL.createObjectURL(blob);
       setExportedVideoBlob(blob);
       setExportedVideoUrl(url);
@@ -4242,7 +4263,8 @@ const renderEditor = () => (
                           onClick={async () => {
                             try {
                               if (!exportedVideoBlob) return;
-                              const file = new File([exportedVideoBlob], `project-${Date.now()}.mp4`, { type: 'video/mp4' });
+                              const bestType = getBestSupportedVideoType();
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
                               await navigator.share({
                                 files: [file],
                                 title: 'My Video Project',
@@ -4262,9 +4284,10 @@ const renderEditor = () => (
                     <>
                       <button
                         onClick={() => {
+                          const bestType = getBestSupportedVideoType();
                           const a = document.createElement("a");
                           a.href = exportedVideoUrl;
-                          a.download = `project-${exportResolution}-${Date.now()}.webm`;
+                          a.download = `project-${exportResolution}-${Date.now()}.${bestType.ext}`;
                           a.click();
                           showToast("Video downloaded.");
                         }}
@@ -4279,7 +4302,8 @@ const renderEditor = () => (
                           onClick={async () => {
                             try {
                               if (!exportedVideoBlob) return;
-                              const file = new File([exportedVideoBlob], `project-${Date.now()}.webm`, { type: 'video/webm' });
+                              const bestType = getBestSupportedVideoType();
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
                               await navigator.share({
                                 files: [file],
                                 title: 'My Video Project',

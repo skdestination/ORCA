@@ -112,60 +112,74 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
     
     let d = `M ${sorted[0].x * w} ${(1 - sorted[0].y) * h}`;
     
-    // Use bezier curves or linear. linear for now to match exactly what points mean, 
-    // or simple generic spline (like Catmull-Rom or simple bezier if needed)
-    // The image shows straight lines between points.
-    for (let i = 1; i < sorted.length; i++) {
-       d += ` L ${sorted[i].x * w} ${(1 - sorted[i].y) * h}`;
+    if (sorted.length === 2) {
+      d += ` L ${sorted[1].x * w} ${(1 - sorted[1].y) * h}`;
+      return d;
+    }
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const curr = sorted[i];
+      const next = sorted[i + 1];
+      
+      const currX = curr.x * w;
+      const currY = (1 - curr.y) * h;
+      const nextX = next.x * w;
+      const nextY = (1 - next.y) * h;
+      
+      // Control points for a graceful smooth spline easement:
+      const cpX1 = currX + (nextX - currX) / 3;
+      const cpY1 = currY;
+      const cpX2 = currX + 2 * (nextX - currX) / 3;
+      const cpY2 = nextY;
+      
+      d += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${nextX} ${nextY}`;
     }
     return d;
   };
 
   return (
-    <div className="flex flex-col w-full bg-[#1a1a1c] rounded-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+    <div className="flex flex-col w-full bg-zinc-950/95 border border-white/10 rounded-2xl overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.8)]" onClick={(e) => e.stopPropagation()}>
       {/* Header */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-white/[0.03]">
-        <div className="flex items-center gap-1 text-[#a1a1aa] text-[9px] font-bold font-sans uppercase tracking-tight">
-          <span className="text-zinc-500">Speed:</span> <span className="text-[#e2db81]">6.3s → 6.3s</span>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.06]">
+        <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] font-bold font-sans uppercase tracking-tight">
+          <span className="text-zinc-500">Speed:</span> <span className="text-[#e2db81] font-mono">6.3s → 6.3s</span>
         </div>
         
         <div className="flex items-center gap-1">
-          <button className="text-zinc-400 hover:text-white p-1 hover:bg-white/5 rounded transition-colors" title="Play animation">
+          <button className="text-zinc-400 hover:text-white p-1 hover:bg-white/5 rounded-lg transition-colors cursor-pointer" title="Play animation">
             <Play size={11} />
           </button>
           
           <button 
             onClick={handleDeleteBeat}
             disabled={!(points.findIndex(p => p.id === selectedPointId) > 0 && points.findIndex(p => p.id === selectedPointId) < points.length - 1)}
-            className="flex items-center justify-center p-1 bg-[#2a2a2c]/60 hover:bg-red-500/15 text-zinc-400 hover:text-red-400 disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-zinc-400 rounded transition-colors"
+            className="flex items-center justify-center p-1 bg-white/5 hover:bg-red-500/15 text-zinc-400 hover:text-red-400 disabled:opacity-25 disabled:hover:bg-transparent disabled:hover:text-zinc-400 rounded-lg transition-colors cursor-pointer"
             title="Delete selected beat point"
           >
             <Minus size={11} />
           </button>
 
-          <button onClick={onClose} className="p-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/10 rounded transition-all">
+          <button onClick={onClose} className="p-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/10 rounded-lg transition-all cursor-pointer">
             <Check size={11} strokeWidth={2.5} />
           </button>
         </div>
       </div>
 
       {/* Editor Area */}
-      <div className="px-3 py-1 relative select-none">
+      <div className="px-3 py-2 relative select-none">
         <div 
           ref={containerRef}
-          className="relative w-full h-[110px] border border-[#3a3a3c] bg-[#1a1a1c] mb-2"
+          className="relative w-full h-[110px] border border-white/5 bg-zinc-950 rounded-xl overflow-hidden mb-2"
         >
           {/* Horizontal Grid lines */}
-          {/* 10x top solid line is the border */}
-          {/* 0.1x bottom solid line is the border */}
           {/* Upper dashed */}
-          <div className="absolute top-1/4 left-0 right-0 border-t border-dashed border-[#3a3a3c]" />
+          <div className="absolute top-1/4 left-0 right-0 border-t border-dashed border-white/[0.04]" />
           {/* Lower dashed */}
-          <div className="absolute top-[75%] left-0 right-0 border-t border-dashed border-[#3a3a3c]" />
+          <div className="absolute top-[75%] left-0 right-0 border-t border-dashed border-white/[0.04]" />
 
           {/* Labels */}
-          <div className="absolute top-1 left-2 text-[8px] text-[#71717a] font-medium font-mono">10x</div>
-          <div className="absolute bottom-1 left-2 text-[8px] text-[#71717a] font-medium font-mono">0.1x</div>
+          <div className="absolute top-1 left-2 text-[8px] text-zinc-650 font-bold font-mono">10x</div>
+          <div className="absolute bottom-1 left-2 text-[8px] text-zinc-650 font-bold font-mono">0.1x</div>
 
           {/* SVG Canvas for lines */}
           <svg className="absolute inset-0 w-full h-full pointer-events-none">
@@ -173,13 +187,15 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
               d={generatePath()} 
               fill="none" 
               stroke="#e2db81" 
-              strokeWidth="2" 
+              strokeWidth="2.5" 
+              strokeLinecap="round"
+              strokeLinejoin="round"
             />
           </svg>
 
           {/* Playhead */}
           <div 
-            className="absolute top-0 bottom-0 w-[1px] bg-white pointer-events-none"
+            className="absolute top-0 bottom-0 w-[1.5px] bg-indigo-500 pointer-events-none opacity-85"
             style={{ left: `${playhead * 100}%` }}
           />
 
@@ -201,7 +217,7 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
                 }}
               >
                 <div 
-                  className={`rounded-full transition-all duration-150 ${isSelected ? 'w-[12px] h-[12px] bg-white' : 'w-2.5 h-2.5 bg-black border-[1.5px] border-white'}`}
+                  className={`rounded-full transition-all duration-150 shadow-md ${isSelected ? 'w-[12px] h-[12px] bg-[#e2db81] ring-4 ring-[#e2db81]/25' : 'w-2.5 h-2.5 bg-zinc-950 border-[2px] border-white/80 hover:border-[#e2db81]'}`}
                 />
               </div>
             );
@@ -209,8 +225,8 @@ export const SpeedCurveEditor: React.FC<SpeedCurveEditorProps> = ({ onClose }) =
         </div>
         
         {/* Footer Actions */}
-        <div className="flex justify-center pb-1">
-          <button className="bg-[#2a2a2c] hover:bg-[#323235] text-[#71717a] hover:text-white px-2.5 py-1 rounded-[6px] text-[10px] font-medium transition-colors">
+        <div className="flex justify-center pb-0.5">
+          <button className="bg-white/5 hover:bg-white/10 border border-white/5 text-zinc-300 hover:text-white px-2.5 py-1 rounded-lg text-[9px] font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer">
             Smooth slow-mo
           </button>
         </div>

@@ -67,6 +67,8 @@ import {
   ChevronRight,
   MoreHorizontal,
   Sparkles,
+  Video,
+  Folder,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Capacitor } from "@capacitor/core";
@@ -869,6 +871,39 @@ export default function App() {
   const [activeExpandedMenu, setActiveExpandedMenu] = useState<string | null>(
     null,
   );
+  const [isMediaPermissionGranted, setIsMediaPermissionGranted] = useState<boolean>(false);
+  const [selectedMediaTab, setSelectedMediaTab] = useState<"Image" | "Video" | "Audio" | "Folders">("Image");
+  const [currentMediaFolder, setCurrentMediaFolder] = useState<string | null>(null);
+  const [isMediaExpanded, setIsMediaExpanded] = useState(false);
+  const mediaTouchStartYRef = useRef<number | null>(null);
+
+  const handleMediaTouchStart = (e: React.TouchEvent) => {
+    mediaTouchStartYRef.current = e.touches[0].clientY;
+  };
+
+  const handleMediaTouchMove = (e: React.TouchEvent) => {
+    if (mediaTouchStartYRef.current === null) return;
+    const currentY = e.touches[0].clientY;
+    const diffY = mediaTouchStartYRef.current - currentY; // positive means swipe up
+    if (diffY > 35 && !isMediaExpanded) {
+      setIsMediaExpanded(true);
+      mediaTouchStartYRef.current = null;
+    } else if (diffY < -35 && isMediaExpanded) {
+      setIsMediaExpanded(false);
+      mediaTouchStartYRef.current = null;
+    }
+  };
+
+  const handleMediaTouchEnd = () => {
+    mediaTouchStartYRef.current = null;
+  };
+
+  useEffect(() => {
+    if (activeExpandedMenu !== "plus-media") {
+      setIsMediaExpanded(false);
+    }
+  }, [activeExpandedMenu]);
+
   const [activeTransformTab, setActiveTransformTab] = useState<"position" | "scale" | "rotate">("position");
   const [maskAdjustOpen, setMaskAdjustOpen] = useState(false);
   const [showFloatingMaskAdjust, setShowFloatingMaskAdjust] = useState(false);
@@ -2089,6 +2124,54 @@ export default function App() {
         fps,
       },
     ]);
+  };
+
+  const sampleMediaImages = [
+    { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600" },
+    { name: "Forest Fog", url: "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&q=80&w=600" },
+    { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600" },
+    { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600" },
+    { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600" },
+    { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600" },
+  ];
+
+  const sampleMediaVideos = [
+    { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400" },
+    { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400" },
+    { name: "Forest River", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", duration: 14, thumbnail: "https://images.unsplash.com/photo-1425913397330-cf8af2ff40a1?auto=format&fit=crop&q=80&w=400" },
+    { name: "City Lights", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?auto=format&fit=crop&q=80&w=400" },
+  ];
+
+  const sampleMediaAudio = [
+    { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372 },
+    { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184 },
+    { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302 },
+    { name: "Chill Groove", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3", duration: 251 },
+  ];
+
+  const handleSelectMediaItem = (item: { name: string; url: string; type: "video" | "image" | "audio"; duration?: number; thumbnail?: string }) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    const fileId = "FM_" + Math.random().toString(36).substring(2, 9);
+    const startAtTime = currentTime;
+    
+    setPillPopup({ message: `Importing ${item.name}...`, type: 'loading' });
+    
+    if (item.type === "image") {
+      addMediaClip(id, "image", item.url, 5, startAtTime, fileId);
+      setPillPopup({ message: `Imported ${item.name} clearly`, type: "info" });
+      setTimeout(() => setPillPopup(null), 2500);
+    } else if (item.type === "audio") {
+      addMediaClip(id, "audio", item.url, item.duration || 10, startAtTime, fileId);
+      setPillPopup({ message: `Imported ${item.name} audio track`, type: "info" });
+      setTimeout(() => setPillPopup(null), 2500);
+    } else {
+      setPillPopup({ message: "Parsing video structures...", type: 'loading' });
+      setTimeout(() => {
+        addMediaClip(id, "video", item.url, item.duration || 12, startAtTime, fileId, 1920, 1080, 30);
+        setPillPopup({ message: `Loaded: 1920x1080 @ 30 FPS`, type: 'info' });
+        setTimeout(() => setPillPopup(null), 2500);
+      }, 800);
+    }
   };
 
   const handleAddText = () => {
@@ -3433,7 +3516,7 @@ export default function App() {
   };
 
   const renderSettings = () => (
-  <div className="flex flex-col h-screen w-full bg-[#121212] overflow-hidden relative">
+  <div className="flex flex-col h-screen w-full bg-[#0c0c0e] overflow-hidden relative">
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 scrollbar-hide">
         <div className="min-h-full flex flex-col pb-[150px]">
           {/* Header */}
@@ -4075,7 +4158,7 @@ const renderHome = () => {
 };
 
 const renderEditor = () => (
-  <div className="flex flex-col h-screen w-full bg-[#1e1e20] overflow-hidden">
+  <div className="flex flex-col h-screen w-full bg-[#0c0c0e] overflow-hidden">
       {/* Exporting Overlay */}
       <AnimatePresence>
         {isExporting && (
@@ -4609,9 +4692,11 @@ const renderEditor = () => (
       </header>
 
       {/* Main Preview Area */}
-      <main className="flex-1 min-h-0 flex flex-col pt-2 pb-4 relative z-[80] bg-[#1e1e20]">
+      <main className="flex-1 min-h-0 flex flex-col pt-2 pb-4 relative z-[80] bg-[#0c0c0e]">
         <div className="flex-1 min-h-0 relative flex items-center justify-center px-4">
-          <div className="relative w-full h-full flex items-center justify-center">
+          <div className={`relative w-full h-full flex items-center justify-center transition-all duration-300 ${
+            activeExpandedMenu === "plus-media" ? "opacity-0 scale-[0.97] pointer-events-none" : "opacity-100 scale-100"
+          }`}>
             <svg
               viewBox={`0 0 ${currentProjectRatio.split(":")[0]} ${currentProjectRatio.split(":")[1]}`}
               className="max-w-full max-h-full h-[100%] pointer-events-none opacity-0"
@@ -5012,6 +5097,233 @@ const renderEditor = () => (
             })}
           </motion.div>
           </div>
+
+          <AnimatePresence>
+            {activeExpandedMenu === "plus-media" && (
+              <motion.div
+                key="media-library-fullscreen"
+                initial={{ opacity: 0, scale: 0.98, y: 15 }}
+                animate={{
+                  opacity: 1,
+                  scale: 1,
+                  y: 0,
+                  top: isMediaExpanded ? -80 : 0,
+                  height: isMediaExpanded ? "calc(100% + 80px)" : "100%"
+                }}
+                exit={{ opacity: 0, scale: 0.98, y: 15 }}
+                transition={{ type: "spring", stiffness: 350, damping: 35 }}
+                className="absolute inset-0 z-[90] bg-transparent flex flex-col text-white overflow-hidden select-none pointer-events-auto font-sans px-3"
+                onPointerDown={(e) => { e.stopPropagation(); }}
+                onTouchStart={handleMediaTouchStart}
+                onTouchMove={handleMediaTouchMove}
+                onTouchEnd={handleMediaTouchEnd}
+                onClick={(e) => { e.stopPropagation(); }}
+              >
+                {/* Swipe/Drag Handle at Top */}
+                <div 
+                  onClick={() => setIsMediaExpanded(!isMediaExpanded)}
+                  className="flex justify-center py-2 shrink-0 cursor-pointer group pointer-events-auto"
+                >
+                  <div className="w-10 h-1 rounded-full bg-zinc-700/60 group-hover:bg-zinc-500/80 transition-colors" />
+                </div>
+
+                {/* Permission or Asset Picker Body */}
+                {!isMediaPermissionGranted ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-6 animate-fade-in max-w-sm mx-auto">
+                    <div className="relative mb-6 flex items-center justify-center">
+                      <span className="absolute inline-flex h-20 w-20 rounded-full bg-indigo-500/10 animate-ping opacity-75"></span>
+                      <span className="absolute inline-flex h-24 w-24 rounded-full bg-indigo-500/5 animate-pulse"></span>
+                      <div className="relative w-16 h-16 rounded-2xl bg-indigo-950/80 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shadow-xl">
+                        <Layers size={28} className="animate-pulse" />
+                      </div>
+                    </div>
+                    
+                    <h4 className="text-sm font-extrabold text-white tracking-widest uppercase mb-1.5">Access Media Library</h4>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed max-w-[260px] mb-6">
+                      Allow storage or local directory access to view high-speed native footage, soundtracks, captures, and folders automatically on your workspace.
+                    </p>
+                    
+                    <div className="flex flex-col gap-2 w-full max-w-[200px]">
+                      <button
+                        onClick={() => setIsMediaPermissionGranted(true)}
+                        className="w-full bg-indigo-600 hover:bg-indigo-505 text-white font-extrabold text-[11px] py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-650/20 active:scale-95 cursor-pointer uppercase tracking-wider"
+                      >
+                        Allow Access
+                      </button>
+                      <button
+                        onClick={() => setActiveExpandedMenu(null)}
+                        className="w-full bg-zinc-850 hover:bg-zinc-800 text-zinc-400 hover:text-white font-semibold text-[11px] py-2 rounded-xl transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col min-h-0 overflow-hidden text-left relative">
+                    {currentMediaFolder && (
+                      <div className="flex items-center justify-between mb-3 shrink-0">
+                        <button
+                          onClick={() => setCurrentMediaFolder(null)}
+                          className="flex items-center gap-1.5 text-[10px] font-bold text-zinc-300 hover:text-white bg-zinc-800/80 py-1 px-3 rounded-lg border border-white/5 transition-colors cursor-pointer"
+                        >
+                          <ArrowLeft size={12} />
+                          <span>Back to Folders</span>
+                        </button>
+                        <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-md border border-emerald-500/15 font-mono text-right">{currentMediaFolder} Directory</span>
+                      </div>
+                    )}
+
+                    <div className="flex-1 overflow-y-auto pr-0.5 grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 gap-3 content-start scrollbar-thin py-1">
+                      {/* Import Custom Option */}
+                      {!currentMediaFolder && (
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="border border-dashed border-white/10 hover:border-indigo-450/40 hover:bg-indigo-500/[0.02] active:bg-zinc-900 rounded-2xl flex flex-col items-center justify-center p-4 text-center cursor-pointer transition-all gap-2 h-28 group shrink-0"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-zinc-900/90 border border-white/5 flex items-center justify-center text-zinc-400 group-hover:text-indigo-400 group-hover:border-indigo-500/20 group-hover:scale-110 transition-all shadow-md">
+                            <PlusIcon size={14} />
+                          </div>
+                          <span className="text-[10px] font-bold text-zinc-350 group-hover:text-zinc-100">Import Custom</span>
+                          <span className="text-[8px] text-zinc-500">From local systems</span>
+                        </div>
+                      )}
+
+                      {selectedMediaTab === "Folders" && !currentMediaFolder ? (
+                        [
+                          { name: "Camera Roll", count: 4, icon: "📁" },
+                          { name: "Downloads", count: 2, icon: "📥" },
+                          { name: "Audio Recordings", count: 2, icon: "🎙️" },
+                          { name: "Screenshots", count: 2, icon: "📸" },
+                        ].map((fold) => (
+                          <div
+                            key={fold.name}
+                            onClick={() => setCurrentMediaFolder(fold.name)}
+                            className="bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-white/[0.1] active:scale-95 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all h-28 shadow-lg group"
+                          >
+                            <span className="text-2xl group-hover:scale-110 transition-all self-start">{fold.icon}</span>
+                            <div className="flex flex-col">
+                              <span className="text-[11px] font-extrabold text-zinc-250 group-hover:text-white truncate">{fold.name}</span>
+                              <span className="text-[8px] text-zinc-500 font-semibold">{fold.count} items</span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        (() => {
+                          let displayItems: any[] = [];
+                          
+                          if (currentMediaFolder) {
+                            if (currentMediaFolder === "Camera Roll") {
+                              displayItems = [
+                                { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400", type: "video" },
+                                { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400", type: "video" },
+                                { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600", type: "image" },
+                              ];
+                            } else if (currentMediaFolder === "Downloads") {
+                              displayItems = [
+                                { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184, type: "audio" },
+                                { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600", type: "image" },
+                              ];
+                            } else if (currentMediaFolder === "Audio Recordings") {
+                              displayItems = [
+                                { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372, type: "audio" },
+                                { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302, type: "audio" },
+                              ];
+                            } else if (currentMediaFolder === "Screenshots") {
+                              displayItems = [
+                                { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600", type: "image" },
+                              ];
+                            }
+                          } else {
+                            if (selectedMediaTab === "Image") {
+                              displayItems = sampleMediaImages.map(img => ({ ...img, type: "image" }));
+                            } else if (selectedMediaTab === "Video") {
+                              displayItems = sampleMediaVideos.map(vid => ({ ...vid, type: "video" }));
+                            } else if (selectedMediaTab === "Audio") {
+                              displayItems = sampleMediaAudio.map(aud => ({ ...aud, type: "audio" }));
+                            }
+                          }
+
+                          return displayItems.map((item, idx) => {
+                            if (item.type === "image") {
+                              return (
+                                <div
+                                  key={`${item.name}-${idx}`}
+                                  onClick={() => {
+                                    handleSelectMediaItem(item);
+                                    setActiveExpandedMenu(null);
+                                  }}
+                                  className="group cursor-pointer relative bg-zinc-900 rounded-2xl overflow-hidden active:scale-98 border border-white/[0.04] hover:border-indigo-400/30 transition-all h-28 select-none shadow-md"
+                                >
+                                  <img 
+                                    src={item.url} 
+                                    alt={item.name} 
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex items-end p-2 sm:p-2.5">
+                                    <span className="text-[10px] font-bold text-white truncate w-full">{item.name}</span>
+                                  </div>
+                                </div>
+                              );
+                            } else if (item.type === "audio") {
+                              return (
+                                <div
+                                  key={`${item.name}-${idx}`}
+                                  onClick={() => {
+                                    handleSelectMediaItem(item);
+                                    setActiveExpandedMenu(null);
+                                  }}
+                                  className="group cursor-pointer bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-indigo-500/20 active:scale-98 rounded-2xl p-3 flex flex-col justify-between h-28 transition-all shadow-md"
+                                >
+                                  <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-[1.05] transition-all">
+                                    <Music size={12} />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="text-[10px] font-bold text-zinc-300 group-hover:text-white truncate">{item.name}</span>
+                                    <span className="text-[8.5px] text-zinc-500 font-semibold">{Math.floor(item.duration / 60)}:{(item.duration % 60).toString().padStart(2, '0')}</span>
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div
+                                  key={`${item.name}-${idx}`}
+                                  onClick={() => {
+                                    handleSelectMediaItem(item);
+                                    setActiveExpandedMenu(null);
+                                  }}
+                                  className="group cursor-pointer relative bg-zinc-950 rounded-2xl overflow-hidden active:scale-98 border border-white/[0.04] hover:border-indigo-400/30 transition-all h-28 select-none shadow-md"
+                                >
+                                  <img 
+                                    src={item.thumbnail} 
+                                    alt={item.name} 
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <div className="absolute top-2 right-2 bg-black/60 px-1.5 py-0.5 rounded-[4px] text-[8.5px] font-bold font-mono tracking-wider border border-white/5">
+                                    0:{(item.duration || 10)}
+                                  </div>
+                                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex items-end p-2 sm:p-2.5">
+                                    <span className="text-[10px] font-bold text-white truncate w-full flex items-center gap-1.5">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block animate-pulse shrink-0"></span>
+                                      <span>{item.name}</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            }
+                          });
+                        })()
+                      )}
+
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Playback Transport Controls */}
@@ -5270,11 +5582,11 @@ const renderEditor = () => (
         </div>
       </main>
 
-      {/* Modern Horizontal Splitter */}
-      <div className="h-px bg-gradient-to-r from-transparent via-zinc-700 to-transparent relative z-[80] bg-[#1e1e20]"></div>
+      {/* Modern Horizontal Splitter - Styled to allow elegant rounded corners on the timeline card below */}
+      <div className="h-px bg-transparent relative z-[80]"></div>
 
       {/* Editor Timeline Space */}
-      <div className="h-[40vh] shrink-0 bg-[#171719] flex flex-col relative w-full select-none z-0 overflow-hidden">
+      <div className="h-[40vh] shrink-0 bg-[#171719] flex flex-col relative w-full select-none z-0 overflow-hidden rounded-t-[20px] sm:rounded-t-[24px] border-t border-white/10 shadow-[0_-12px_40px_rgba(0,0,0,0.45)]">
         {/* Timeline Content Flex Container */}
         <div
           id="master-vertical-scroll"
@@ -6351,7 +6663,7 @@ const renderEditor = () => (
 );
   return (
     <div 
-      className="min-h-screen bg-[#121212] text-white flex flex-col font-sans"
+      className="min-h-screen bg-[#0c0c0e] text-white flex flex-col font-sans"
       style={{ zoom: appScale }}
     >
       {/* Dynamic Render based on Screen */}
@@ -8182,21 +8494,58 @@ const renderEditor = () => (
             <motion.div
               layout
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-              className="flex items-center gap-1 px-1.5 justify-center"
-              style={{ width: "218px" }}
+              className={`flex items-center gap-1 px-1.5 justify-center ${activeExpandedMenu === "plus-media" ? "w-[240px]" : "w-[218px]"} transition-[width] duration-300`}
             >
               <motion.button
                 layout
-                className="p-1 shrink-0 hover:bg-zinc-700 rounded-full text-zinc-300 transition-colors"
-                onClick={() => fileInputRef.current?.click()}
+                className={`p-1 shrink-0 rounded-full flex items-center justify-center transition-all duration-300 ${activeExpandedMenu === "plus-media" ? "bg-indigo-600 text-white rotate-45 animate-pulse" : "hover:bg-zinc-700 text-zinc-300"}`}
+                onClick={() => {
+                  if (activeExpandedMenu === "plus-media") {
+                    setActiveExpandedMenu(null);
+                  } else {
+                    setActiveExpandedMenu("plus-media");
+                  }
+                }}
               >
                 <PlusIcon size={14} />
               </motion.button>
               <motion.div
                 layout
-                className="w-px h-4 bg-zinc-700 mx-1 shrink-0"
+                className="w-px h-4 bg-zinc-700 mx-0.5 shrink-0"
               ></motion.div>
-              <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[164px] overflow-hidden shrink-0 snap-x snap-mandatory">
+
+              {activeExpandedMenu === "plus-media" ? (
+                /* 4 New Options on Flowbar: Image, Video, Audio, Folders */
+                <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[184px] overflow-hidden shrink-0 snap-x snap-mandatory animate-fade-in font-sans">
+                  {[
+                    { id: "Image", icon: <ImageIcon size={11} className="text-zinc-350" /> },
+                    { id: "Video", icon: <Play size={11} className="text-red-400 rotate-90" /> },
+                    { id: "Audio", icon: <Music size={11} className="text-purple-400" /> },
+                    { id: "Folders", icon: <Layers size={11} className="text-emerald-400" /> }
+                  ].map((tab) => {
+                    const isActive = selectedMediaTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedMediaTab(tab.id as any);
+                          setCurrentMediaFolder(null); // Back to folder overview list
+                        }}
+                        className={`px-2 py-0.5 shrink-0 rounded-lg text-[8px] font-extrabold tracking-tight flex items-center gap-1 transition-all duration-200 cursor-pointer border ${
+                          isActive 
+                            ? "bg-indigo-600/30 text-indigo-300 border-indigo-500/35 scale-102" 
+                            : "bg-[#18181c] hover:bg-zinc-800 text-zinc-400 border-transparent"
+                        }`}
+                      >
+                        {tab.icon}
+                        <span>{tab.id}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[164px] overflow-hidden shrink-0 snap-x snap-mandatory">
                 {flowBarOrder.filter((key) => {
                   if (selectedClip?.type === "image" && ["volume", "speed", "stabilize"].includes(key)) {
                     return false;
@@ -8273,6 +8622,7 @@ const renderEditor = () => (
                   }
                 })}
               </div>
+              )}
             </motion.div>
             <input
               type="file"

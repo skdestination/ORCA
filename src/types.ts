@@ -62,6 +62,7 @@ export type Clip = {
   layerId: string;
   type: "video" | "image" | "audio" | "text";
   src: string;
+  name?: string;
   originalSrc?: string;
   fileId?: string;
   text?: string;
@@ -129,6 +130,7 @@ export type Clip = {
   stabilizationMode?: "standard" | "active" | "locked" | "off";
   stabilizationStrength?: number;
   compareStabilization?: boolean;
+  thumbnail?: string;
 };
 
 export type Project = {

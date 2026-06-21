@@ -44,13 +44,42 @@ export function VideoRenderer({
       effectiveTrimStart;
 
     if (!isPlaying) {
-      if (Math.abs(video.currentTime - targetTime) > 0.1) {
-        video.currentTime = targetTime;
+      if (Math.abs(video.currentTime - targetTime) > 0.04) {
+        const now = performance.now();
+        const lastSeekTime = (video as any)._lastSeekTime || 0;
+        const timeSinceLastSeek = now - lastSeekTime;
+
+        if (!video.seeking && timeSinceLastSeek > 30) {
+          try {
+            video.currentTime = targetTime;
+            (video as any)._lastSeekTime = performance.now();
+          } catch (e) {}
+        } else {
+          (video as any)._pendingSeekTime = targetTime;
+          if (!(video as any)._isRafScheduled) {
+            (video as any)._isRafScheduled = true;
+            requestAnimationFrame(() => {
+              (video as any)._isRafScheduled = false;
+              if (video && (video as any)._pendingSeekTime !== undefined) {
+                const pending = (video as any)._pendingSeekTime;
+                (video as any)._pendingSeekTime = undefined;
+                if (Math.abs(video.currentTime - pending) > 0.04 && !video.seeking) {
+                  try {
+                    video.currentTime = pending;
+                    (video as any)._lastSeekTime = performance.now();
+                  } catch (err) {}
+                }
+              }
+            });
+          }
+        }
       }
       if (!video.paused) video.pause();
     } else {
       if (Math.abs(video.currentTime - targetTime) > 0.5) {
-        video.currentTime = targetTime;
+        try {
+          video.currentTime = targetTime;
+        } catch (e) {}
       }
       if (video.paused) {
         const playPromise = video.play();
@@ -122,13 +151,42 @@ export function AudioRenderer({
       effectiveTrimStart;
 
     if (!isPlaying) {
-      if (Math.abs(audio.currentTime - targetTime) > 0.1) {
-        audio.currentTime = targetTime;
+      if (Math.abs(audio.currentTime - targetTime) > 0.04) {
+        const now = performance.now();
+        const lastSeekTime = (audio as any)._lastSeekTime || 0;
+        const timeSinceLastSeek = now - lastSeekTime;
+
+        if (!audio.seeking && timeSinceLastSeek > 30) {
+          try {
+            audio.currentTime = targetTime;
+            (audio as any)._lastSeekTime = performance.now();
+          } catch (e) {}
+        } else {
+          (audio as any)._pendingSeekTime = targetTime;
+          if (!(audio as any)._isRafScheduled) {
+            (audio as any)._isRafScheduled = true;
+            requestAnimationFrame(() => {
+              (audio as any)._isRafScheduled = false;
+              if (audio && (audio as any)._pendingSeekTime !== undefined) {
+                const pending = (audio as any)._pendingSeekTime;
+                (audio as any)._pendingSeekTime = undefined;
+                if (Math.abs(audio.currentTime - pending) > 0.04 && !audio.seeking) {
+                  try {
+                    audio.currentTime = pending;
+                    (audio as any)._lastSeekTime = performance.now();
+                  } catch (err) {}
+                }
+              }
+            });
+          }
+        }
       }
       if (!audio.paused) audio.pause();
     } else {
       if (Math.abs(audio.currentTime - targetTime) > 0.5) {
-        audio.currentTime = targetTime;
+        try {
+          audio.currentTime = targetTime;
+        } catch (e) {}
       }
       if (audio.paused) {
         const playPromise = audio.play();

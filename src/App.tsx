@@ -69,10 +69,12 @@ import {
   Sparkles,
   Video,
   Folder,
+  Keyboard,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Capacitor } from "@capacitor/core";
 import { App as CapApp } from "@capacitor/app";
+import { StatusBar } from "@capacitor/status-bar";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Media } from "@capacitor-community/media";
 import { processSmoothSlowMoBrowser } from "./lib/opticalFlow";
@@ -535,6 +537,568 @@ const getBestSupportedVideoType = () => {
   return { mime: "video/webm", ext: "webm" };
 };
 
+// --- Performance-Optimizing Cached Waveform Resolver & Memoized Timeline Components ---
+const audioWaveCache = new Map<string, { key: string; pathD: string }>();
+
+function getCachedWavePath(clip: Clip, activeExpandedMenu: string | null): string {
+  const kfsHash = clip.keyframes
+    ? clip.keyframes.map(k => `${k.id}_${k.timeOffset}_${k.properties.volume ?? ""}`).join("|")
+    : "";
+  const cacheKey = `${clip.id}_${clip.durationSeconds}_${clip.volume ?? 100}_${kfsHash}_${activeExpandedMenu}`;
+  const cached = audioWaveCache.get(clip.id);
+  
+  if (cached && cached.key === cacheKey) {
+    return cached.pathD;
+  }
+  
+  const seed = clip.id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const freq1 = 0.07 + (seed % 7) * 0.015;
+  const freq2 = 0.14 + (seed % 11) * 0.012;
+  const freq3 = 0.03 + (seed % 5) * 0.008;
+
+  const hasVolumeKeyframes = clip.keyframes?.some(k => k.properties.volume !== undefined);
+  const constantVolume = typeof clip.volume === "number" ? clip.volume : 100;
+  const constantVolMult = constantVolume / 100;
+
+  const barCount = 140;
+  let pathD = "";
+
+  for (let i = 0; i < barCount; i++) {
+    const h1 = Math.sin(i * freq1);
+    const h2 = Math.cos(i * freq2);
+    const h3 = Math.sin(i * freq3);
+    
+    // Generate a premium fluid song acoustic pattern
+    let val = 0.12 + 0.38 * Math.abs(h1) + 0.32 * Math.abs(h2 * h3) + 0.12 * Math.sin(i * 0.3);
+    val = Math.max(0.06, Math.min(0.95, val));
+
+    // Check volume at this slice of the audio duration
+    let volMult = constantVolMult;
+    if (hasVolumeKeyframes && clip.durationSeconds) {
+      const tRel = (i / (barCount - 1)) * clip.durationSeconds;
+      const propsAtBar = getInterpolatedProps(clip, tRel, activeExpandedMenu);
+      volMult = (propsAtBar.volume ?? 100) / 100;
+    }
+    
+    const finalVal = val * volMult;
+    const x = i * 10 + 5;
+    const halfH = finalVal * 42; // Vertically symmetric waves scaling up to 42 units up & down
+    const y1 = 50 - halfH;
+    const y2 = 50 + halfH;
+    pathD += `M ${x} ${y1} L ${x} ${y2} `;
+  }
+  
+  audioWaveCache.set(clip.id, { key: cacheKey, pathD });
+  return pathD;
+}
+
+interface TimelineRulerTicksProps {
+  maxTimelineDuration: number;
+  pixelsPerSecond: number;
+  zoomLevel: number;
+}
+
+const TimelineRulerTicks = React.memo(({
+  maxTimelineDuration,
+  pixelsPerSecond,
+  zoomLevel
+}: TimelineRulerTicksProps) => {
+  return (
+    <>
+      {Array.from({ length: Math.ceil(maxTimelineDuration) }).map(
+        (_, i) => {
+          let step = 1;
+          if (pixelsPerSecond < 2) step = 300; // marks every 5 mins
+          else if (pixelsPerSecond < 5) step = 60; // marks every 1 min
+          else if (pixelsPerSecond < 10) step = 30; // very zoomed out
+          else if (pixelsPerSecond < 20) step = 10;
+          else if (pixelsPerSecond < 35) step = 5;
+          else if (pixelsPerSecond < 70) step = 2; // normal default is 100
+          
+          const showText = i % step === 0;
+
+          // Skip rendering the tick entirely if it's too squished
+          const hideTick = pixelsPerSecond < 2 ? i % 60 !== 0 : (pixelsPerSecond < 5 ? i % 10 !== 0 : false);
+          if (hideTick) return null;
+
+          return (
+            <div
+              key={i}
+              className="absolute h-full border-l border-zinc-700/60 pointer-events-none"
+              style={{ left: `${i * pixelsPerSecond}px` }}
+            >
+              {showText && (
+                <span
+                  className="absolute -left-[4px] top-[3px] text-[8px] sm:text-[8.5px] text-zinc-400 hover:text-zinc-200 font-semibold font-mono tracking-wider pl-1 bg-transparent px-1 rounded line-height-none leading-none select-none transition-colors"
+                  style={{ textShadow: "none" }}
+                >
+                  {i < 60 ? i.toString() : `${Math.floor(i/60)}:${(i%60).toString().padStart(2,"0")}`}
+                </span>
+              )}
+              {/* Sub-ticks for zoom */}
+              {zoomLevel >= 3 && Array.from({ length: 9 }).map((_, subIndex) => {
+                const isHalf = subIndex === 4;
+                return (
+                  <div
+                    key={subIndex}
+                    className={`absolute bottom-0 w-[1px] ${isHalf ? "bg-zinc-650" : "bg-zinc-800/80"} pointer-events-none`}
+                    style={{
+                      left: `${(subIndex + 1) * (pixelsPerSecond / 10)}px`,
+                      height: isHalf ? "8px" : "4px",
+                    }}
+                  />
+                );
+              })}
+            </div>
+          );
+        }
+      )}
+    </>
+  );
+}, (prev, next) => {
+  return (
+    prev.maxTimelineDuration === next.maxTimelineDuration &&
+    prev.pixelsPerSecond === next.pixelsPerSecond &&
+    prev.zoomLevel === next.zoomLevel
+  );
+});
+
+interface TimelineClipItemProps {
+  clip: Clip;
+  pixelsPerSecond: number;
+  isCompactMode: boolean;
+  selectedClipIds: string[];
+  selectedClipId: string | null;
+  layerHiddenOrMuted: boolean;
+  activeExpandedMenu: string | null;
+  currentTime: number;
+  isErrored: boolean;
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>, clip: Clip) => void;
+  onClipError: (clipId: string) => void;
+  onTrimStart: (e: React.PointerEvent<HTMLDivElement>, clip: Clip, handle: "left" | "right") => void;
+}
+
+const TimelineClipItem = React.memo(({
+  clip,
+  pixelsPerSecond,
+  isCompactMode,
+  selectedClipIds,
+  selectedClipId,
+  layerHiddenOrMuted,
+  activeExpandedMenu,
+  currentTime,
+  isErrored,
+  onPointerDown,
+  onClipError,
+  onTrimStart,
+}: TimelineClipItemProps) => {
+  const isSelected = selectedClipId === clip.id;
+  
+  return (
+    <div
+      onPointerDown={(e) => onPointerDown(e, clip)}
+      className={`absolute ${isCompactMode ? "h-[18px] sm:h-[22px]" : "h-[28px] sm:h-[34px]"} overflow-hidden flex items-center cursor-pointer select-none border backdrop-blur-sm transition-[opacity,border-color,background-color,shadow] duration-250 shadow-[0_3px_10px_rgba(0,0,0,0.3)] relative group
+                 ${clip.type === "audio" ? "rounded-xl bg-gradient-to-r from-[#21103d]/95 to-[#3b1263]/90 border-purple-500/20" : "rounded-lg"}
+                 ${clip.type === "video" ? "bg-gradient-to-r from-[#0d1e3d]/95 via-[#122b5e]/90 to-[#0d1e3d]/80 border-indigo-500/20" : ""}
+                 ${clip.type === "text" ? "bg-gradient-to-r from-[#441f05]/95 via-[#632900]/90 to-[#441f05]/80 border-amber-500/20" : ""}
+                 ${clip.type === "image" ? "bg-gradient-to-r from-[#032a19]/95 via-[#0c4029]/90 to-[#032a19]/80 border-emerald-500/20" : ""}
+                 ${selectedClipIds.includes(clip.id) 
+                   ? (clip.type === "audio" 
+                     ? "z-20 opacity-100 border-purple-400/95 shadow-[0_0_15px_rgba(168,85,247,0.45),_inset_0_1px_1px_rgba(255,255,255,0.15)] bg-gradient-to-b from-[#2d114c] to-[#150727]" 
+                     : `z-20 opacity-100 shadow-[0_0_15px_rgba(99,102,241,0.35),_inset_0_1px_1px_rgba(255,255,255,0.15)] bg-gradient-to-b ${
+                         clip.type === "video" ? "from-[#173a7c] to-[#0a183d] border-indigo-400" 
+                         : clip.type === "text" ? "from-[#7e3e08] to-[#301300] border-amber-400" 
+                         : "from-[#115b3a] to-[#011f10] border-emerald-400"
+                       }`) 
+                   : "z-10 opacity-[0.88] hover:opacity-100 border-white/[0.05] hover:border-white/15"
+                 }
+                 ${layerHiddenOrMuted ? "grayscale opacity-25 shadow-none" : ""}
+               `}
+      style={{
+        left: clip.leftSeconds * pixelsPerSecond,
+        width: Math.max(2, clip.durationSeconds * pixelsPerSecond),
+        touchAction: "none",
+        willChange: "left, width",
+      }}
+    >
+      {/* High-glass aesthetic top specular line */}
+      <div className="absolute inset-x-0 top-0 h-[38%] bg-gradient-to-b from-white/[0.08] to-transparent pointer-events-none z-20" />
+      
+      {/* Keyframes Overlay */}
+      {clip.keyframes && clip.keyframes.length > 0 && (() => {
+        const volumeKeyframes = clip.keyframes.filter((k) => k.properties.volume !== undefined).sort((a,b) => a.timeOffset - b.timeOffset);
+        const moveKeyframes = clip.keyframes.filter((k) => k.properties.translateX !== undefined || k.properties.scale !== undefined).sort((a,b) => a.timeOffset - b.timeOffset);
+
+        return (
+          <div className="absolute inset-0 pointer-events-none z-30" style={{ margin: '4px 0' }}>
+            <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
+              {/* Volume - Purple */}
+              {volumeKeyframes.length > 1 && (
+                <polyline 
+                  points={volumeKeyframes.map((kf) => 
+                    `${(kf.timeOffset / clip.durationSeconds) * 100},${100 - Math.min(100, Math.max(0, kf.properties.volume ?? 100))}`
+                  ).join(' ')}
+                  fill="none" stroke="#a855f7" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                />
+              )}
+              {/* Zoom - Green */}
+              {moveKeyframes.length > 1 && (
+                <polyline 
+                  points={moveKeyframes.map((kf) => {
+                    const sc = kf.properties.scale ?? 1;
+                    const y = sc <= 1 ? 100 - (sc * 50) : Math.max(0, 50 - ((sc - 1) * 25));
+                    return `${(kf.timeOffset / clip.durationSeconds) * 100},${y}`;
+                  }).join(' ')}
+                  fill="none" stroke="#22c55e" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                />
+              )}
+              {/* Pan - Blue */}
+              {moveKeyframes.length > 1 && (
+                <polyline 
+                  points={moveKeyframes.map((kf) => {
+                    const tx = kf.properties.translateX ?? 0;
+                    const y = Math.max(0, Math.min(100, 50 - (tx / 400) * 50));
+                    return `${(kf.timeOffset / clip.durationSeconds) * 100},${y}`;
+                  }).join(' ')}
+                  fill="none" stroke="#3b82f6" strokeWidth="2" vectorEffect="non-scaling-stroke" opacity="0.6" strokeDasharray="4,4"
+                />
+              )}
+            </svg>
+
+            {clip.keyframes.map((kf) => {
+              const isVol = kf.properties.volume !== undefined;
+              const isMove = kf.properties.translateX !== undefined || kf.properties.scale !== undefined;
+              
+              const x = (kf.timeOffset / clip.durationSeconds) * 100;
+
+              return (
+                <div key={kf.id}>
+                  {isVol && (() => {
+                    const y = 100 - Math.min(100, Math.max(0, kf.properties.volume ?? 100));
+                    return (
+                      <div
+                        className="absolute w-[10px] h-[10px] border-[2px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-40 group bg-[#a855f7]"
+                        style={{ left: `${x}%`, top: `${y}%` }}
+                      >
+                      </div>
+                    );
+                  })()}
+                  {isMove && (() => {
+                    const sc = kf.properties.scale ?? 1;
+                    const yZoom = sc <= 1 ? 100 - (sc * 50) : Math.max(0, 50 - ((sc - 1) * 25));
+
+                    const tx = kf.properties.translateX ?? 0;
+                    const yPan = Math.max(0, Math.min(100, 50 - (tx / 400) * 50));
+
+                    return (
+                      <>
+                        {/* Zoom Node */}
+                        <div
+                          className="absolute w-[10px] h-[10px] border-[2px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-30 group bg-[#22c55e]"
+                          style={{ left: `${x}%`, top: `${yZoom}%` }}
+                        >
+                        </div>
+                        {/* Pan Node */}
+                        {Math.abs(yPan - yZoom) > 5 && (
+                          <div
+                            className="absolute w-[8px] h-[8px] border-[1.5px] border-[#252528] rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.5)] transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center transition-all z-20 group bg-[#3b82f6]"
+                            style={{ left: `${x}%`, top: `${yPan}%` }}
+                          >
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      <div className="absolute inset-0 bg-black/10 pointer-events-none z-10"></div>
+      
+      {clip.type === "text" && (
+        <div className="w-full h-full flex items-center justify-center px-4 pointer-events-none overflow-hidden pb-1 pt-3">
+          <span className="text-[12px] font-bold text-white/90 truncate drop-shadow-sm bg-black/40 px-2 py-0.5 rounded border border-white/10">
+            {clip.text || "Type text..."}
+          </span>
+        </div>
+      )}
+      
+      {clip.type === "image" && (
+        <>
+          <img
+            src={clip.src || undefined}
+            className="absolute inset-0 w-full h-full object-cover opacity-70 pointer-events-none"
+            draggable={false}
+            onError={() => onClipError(clip.id)}
+          />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/20 to-transparent pointer-events-none z-10"></div>
+        </>
+      )}
+      
+      {clip.type === "video" && (
+        <>
+          <video
+            src={clip.src ? clip.src + "#t=0.001" : undefined}
+            className="absolute inset-0 w-full h-full object-cover opacity-70 pointer-events-none"
+            draggable={false}
+            preload="metadata"
+            onError={() => onClipError(clip.id)}
+          />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/20 to-transparent pointer-events-none z-10"></div>
+        </>
+      )}
+      
+      {clip.type === "audio" && (() => {
+        const pathD = getCachedWavePath(clip, activeExpandedMenu);
+        const gradientId = `wave-grad-${clip.id}`;
+        return (
+          <svg 
+            className="absolute inset-y-[4px] left-[12px] right-[12px] w-[calc(100%-24px)] h-[calc(100%-8px)] pointer-events-none opacity-[0.9]"
+            viewBox="0 0 1400 100"
+            preserveAspectRatio="none"
+          >
+            <defs>
+              <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#c084fc" />
+                <stop offset="50%" stopColor="#f472b6" />
+                <stop offset="100%" stopColor="#818cf8" />
+              </linearGradient>
+            </defs>
+            <path
+              d={pathD}
+              stroke={`url(#${gradientId})`}
+              strokeWidth="3.2"
+              strokeLinecap="round"
+            />
+          </svg>
+        );
+      })()}
+
+      {/* Type indicator icon */}
+      <div className={`absolute max-w-full overflow-hidden whitespace-nowrap pl-2 flex items-center gap-1 ${clip.type === "audio" ? "inset-y-0 z-20 pointer-events-none" : `${isCompactMode ? "top-0.5" : "top-1"} pointer-events-none`}`}>
+        {isErrored && clip.type !== "text" && (
+          <span className="text-[10px] font-bold text-red-100 uppercase drop-shadow-md pb-0.5 px-1 bg-red-500/80 rounded inline-flex items-center gap-1">
+            <AlertCircle size={10} /> Missing File
+          </span>
+        )}
+        
+        {clip.type === "audio" ? (
+          <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[10px] py-0.5 px-2"} font-bold text-purple-200 tracking-wider drop-shadow-sm bg-black/55 border border-purple-500/25 rounded-md inline-flex items-center backdrop-blur-md shadow-sm gap-1 ml-0.5 sm:ml-1 scale-95 origin-left`}>
+            <span className={`${isCompactMode ? "w-1 h-1" : "w-1.5 h-1.5"} rounded-full bg-purple-400 animate-pulse shrink-0`} />
+            AUDIO {layerHiddenOrMuted && "(MUTED)"}
+          </span>
+        ) : (
+          <span className={`${isCompactMode ? "text-[8px] sm:text-[9px] py-0 px-1" : "text-[9px] py-0.5 px-1.5"} font-bold tracking-wider text-zinc-200 drop-shadow-sm bg-black/55 border border-white/10 rounded-md shadow-sm backdrop-blur-md inline-flex items-center uppercase scale-95 origin-left`}>
+            {clip.type} {layerHiddenOrMuted && "(HIDDEN)"}
+          </span>
+        )}
+
+        {clip.opticalFlow && (
+          <span className="text-[10px] font-bold text-indigo-200 uppercase drop-shadow-md pb-0.5 px-1 bg-indigo-500/50 rounded inline-flex items-center gap-1">
+            <Activity size={10} /> Smooth
+          </span>
+        )}
+      </div>
+
+      {/* Keyframe Markers and Slope Connections */}
+      {clip.keyframes && clip.keyframes.length > 0 && (
+        <svg className="absolute inset-0 w-full h-full pointer-events-none z-30 overflow-visible">
+          {(() => {
+            const sortedKfs = [...clip.keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
+            const isVol = activeExpandedMenu === "volume";
+            const relevantSortedKfs = sortedKfs.filter(kf => {
+              if (isVol) {
+                return kf.properties.volume !== undefined;
+              } else {
+                return kf.properties.translateX !== undefined || kf.properties.scale !== undefined;
+              }
+            });
+            const points = relevantSortedKfs.map(kf => {
+              const xCoord = kf.timeOffset * pixelsPerSecond;
+              
+              let val = 1.0;
+              if (kf.properties.volume !== undefined) {
+                val = kf.properties.volume > 1.5 ? kf.properties.volume / 100 : kf.properties.volume;
+              } else if (kf.properties.opacity !== undefined) {
+                val = kf.properties.opacity;
+              } else if (kf.properties.scale !== undefined) {
+                val = (kf.properties.scale - 0.1) / 2.9;
+              }
+              val = Math.max(0, Math.min(1, val));
+              
+              const yCoord = 29 - (val * 20); 
+              return { x: xCoord, y: yCoord, val, kf };
+            });
+
+            let pathD = "";
+            if (points.length >= 2) {
+              pathD = `M ${points[0].x} ${points[0].y} ` + points.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
+            }
+
+            return (
+              <>
+                {pathD && (
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="#a5b4fc"
+                    strokeWidth="0.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+
+                {points.map((p) => {
+                  const isSelectedKf = isSelected && Math.abs(currentTime - (clip.leftSeconds + p.kf.timeOffset)) < 0.05;
+                  return (
+                    <g key={p.kf.id} className="transform-gpu">
+                      {isSelectedKf && (
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r="7"
+                          fill="none"
+                          stroke="#818cf8"
+                          strokeWidth="1.5"
+                          className="animate-pulse"
+                          style={{ transformOrigin: `${p.x}px ${p.y}px` }}
+                        />
+                      )}
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r="5"
+                        fill="#1e1b4b"
+                        stroke="none"
+                      />
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r="3.5"
+                        fill={isSelectedKf ? "#ffffff" : "#c7d2fe"}
+                        stroke={isSelectedKf ? "#4f46e5" : "#4338ca"}
+                        strokeWidth="1.5"
+                      />
+                      {isSelected && (
+                        <text
+                          x={p.x}
+                          y={p.y - 7}
+                          textAnchor="middle"
+                          fill="#ffffff"
+                          fontSize="7"
+                          fontWeight="bold"
+                          className="font-mono pointer-events-none drop-shadow-[0_1px_2.5px_rgba(0,0,0,0.95)] select-none"
+                          style={{ paintOrder: "stroke", stroke: "#000000", strokeWidth: "1.5px", strokeLinejoin: "round" }}
+                        >
+                          {p.kf.properties.volume !== undefined 
+                            ? `${Math.round((p.kf.properties.volume > 1.5 ? p.kf.properties.volume / 100 : p.kf.properties.volume) * 100)}%` 
+                            : p.kf.properties.opacity !== undefined 
+                            ? `${Math.round(p.kf.properties.opacity * 100)}%`
+                            : p.kf.properties.scale !== undefined
+                            ? `${Math.round(p.kf.properties.scale * 100)}%`
+                            : ""
+                          }
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </>
+            );
+          })()}
+        </svg>
+      )}
+
+      {/* Trim Controls with premium glowing edge handle bar */}
+      {isSelected && (
+        <>
+          <div
+            onPointerDown={(e) => onTrimStart(e, clip, "left")}
+            className="absolute left-0 top-0 bottom-0 w-[10px] bg-white/90 hover:bg-white border-r border-black/40 flex items-center justify-center cursor-col-resize hover:w-[13px] transition-all z-25 shadow-[1px_0_6px_rgba(0,0,0,0.5)]"
+            style={{ touchAction: "none" }}
+          >
+            <div className="flex flex-col gap-0.5 justify-center items-center">
+              <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+              <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+            </div>
+          </div>
+          <div
+            onPointerDown={(e) => onTrimStart(e, clip, "right")}
+            className="absolute right-0 top-0 bottom-0 w-[10px] bg-white/90 hover:bg-white border-l border-black/40 flex items-center justify-center cursor-col-resize hover:w-[13px] transition-all z-25 shadow-[-1px_0_6px_rgba(0,0,0,0.5)]"
+            style={{ touchAction: "none" }}
+          >
+            <div className="flex flex-col gap-0.5 justify-center items-center">
+              <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+              <div className="w-[1.5px] h-1.5 bg-zinc-700 rounded-full" />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}, (prev, next) => {
+  const isSelected = next.selectedClipId === next.clip.id;
+  const wasSelected = prev.selectedClipId === prev.clip.id;
+  if (isSelected !== wasSelected) {
+    return false; // selection transitioned
+  }
+  if (isSelected) {
+    // Selected clip re-renders on playhead tick to animate keyframe proximity pulse
+    if (prev.currentTime !== next.currentTime) {
+      return false;
+    }
+  }
+  return (
+    prev.clip === next.clip &&
+    prev.pixelsPerSecond === next.pixelsPerSecond &&
+    prev.isCompactMode === next.isCompactMode &&
+    prev.layerHiddenOrMuted === next.layerHiddenOrMuted &&
+    prev.activeExpandedMenu === next.activeExpandedMenu &&
+    prev.isErrored === next.isErrored &&
+    prev.selectedClipIds === next.selectedClipIds
+  );
+});
+
+const sampleMediaImages = [
+  { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600" },
+  { name: "Forest Fog", url: "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&q=80&w=600" },
+  { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600" },
+  { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600" },
+  { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600" },
+  { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600" },
+];
+
+const sampleMediaVideos = [
+  { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400" },
+  { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400" },
+  { name: "Forest River", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", duration: 14, thumbnail: "https://images.unsplash.com/photo-1425913397330-cf8af2ff40a1?auto=format&fit=crop&q=80&w=400" },
+  { name: "City Lights", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?auto=format&fit=crop&q=80&w=400" },
+];
+
+const sampleMediaAudio = [
+  { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372 },
+  { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184 },
+  { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302 },
+  { name: "Chill Groove", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3", duration: 251 },
+];
+
+const KEYBOARD_SHORTCUTS = [
+  { keys: ["Space"], desc: "Toggle Play / Pause", category: "Playback" },
+  { keys: ["S"], desc: "Split Clip at Playhead", category: "Editing" },
+  { keys: ["Delete"], desc: "Delete Selected Clip", category: "Editing" },
+  { keys: ["Cmd/Ctrl", "Z"], desc: "Undo last change", category: "History" },
+  { keys: ["Cmd/Ctrl", "Shift", "Z"], desc: "Redo change", category: "History" },
+  { keys: ["←"], desc: "Seek backward 0.5s", category: "Navigation" },
+  { keys: ["→"], desc: "Seek forward 0.5s", category: "Navigation" },
+  { keys: ["Shift", "←"], desc: "Seek backward 5s", category: "Navigation" },
+  { keys: ["Shift", "→"], desc: "Seek forward 5s", category: "Navigation" },
+  { keys: ["+"], desc: "Zoom in Timeline", category: "View" },
+  { keys: ["-"], desc: "Zoom out Timeline", category: "View" },
+];
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>("home");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -865,6 +1429,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1); // 1 = normal, 2 = zoomed in
   const [isCompactMode, setIsCompactMode] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [stabilizingProgress, setStabilizingProgress] = useState<{ clipId: string; progress: number; stage: string } | null>(null);
   const [playheadX, setPlayheadX] = useState(150);
   const playheadXRef = useRef(150);
@@ -906,6 +1471,86 @@ export default function App() {
 
   const [deviceMedias, setDeviceMedias] = useState<any[]>([]);
   const [isMediaLoading, setIsMediaLoading] = useState<boolean>(false);
+
+  const memoizedMediaFolders = useMemo(() => {
+    const foldersMap: { [key: string]: { count: number; icon: string } } = {};
+    if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
+      deviceMedias.forEach(item => {
+        const folderName = item.folder || "Camera Roll";
+        if (!foldersMap[folderName]) {
+          let icon = "📁";
+          if (folderName.toLowerCase().includes("download")) icon = "📥";
+          else if (folderName.toLowerCase().includes("camera") || folderName.toLowerCase().includes("dcim")) icon = "📸";
+          else if (folderName.toLowerCase().includes("record") || folderName.toLowerCase().includes("audio")) icon = "🎙️";
+          else if (folderName.toLowerCase().includes("screenshot")) icon = "🖼️";
+          else if (folderName.toLowerCase().includes("telegram") || folderName.toLowerCase().includes("whatsapp")) icon = "💬";
+          foldersMap[folderName] = { count: 0, icon };
+        }
+        foldersMap[folderName].count++;
+      });
+    }
+    return Object.keys(foldersMap).length > 0 
+      ? Object.keys(foldersMap).map(name => ({
+          name,
+          count: foldersMap[name].count,
+          icon: foldersMap[name].icon
+        }))
+      : [
+          { name: "Camera Roll", count: 4, icon: "📁" },
+          { name: "Downloads", count: 2, icon: "📥" },
+          { name: "Audio Recordings", count: 2, icon: "🎙️" },
+          { name: "Screenshots", count: 2, icon: "📸" },
+        ];
+  }, [deviceMedias]);
+
+  const memoizedDisplayItems = useMemo(() => {
+    let displayItems: any[] = [];
+    
+    if (currentMediaFolder) {
+      if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
+        displayItems = deviceMedias.filter(item => item.folder === currentMediaFolder);
+      } else {
+        if (currentMediaFolder === "Camera Roll") {
+          displayItems = [
+            { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400", type: "video" },
+            { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400", type: "video" },
+            { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600", type: "image" },
+            { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600", type: "image" },
+          ];
+        } else if (currentMediaFolder === "Downloads") {
+          displayItems = [
+            { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184, type: "audio" },
+            { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600", type: "image" },
+          ];
+        } else if (currentMediaFolder === "Audio Recordings") {
+          displayItems = [
+            { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372, type: "audio" },
+            { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302, type: "audio" },
+          ];
+        } else if (currentMediaFolder === "Screenshots") {
+          displayItems = [
+            { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600", type: "image" },
+            { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600", type: "image" },
+          ];
+        }
+      }
+    } else {
+      if (selectedMediaTab === "Image") {
+        displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+          ? deviceMedias.filter(item => item.type === "image")
+          : sampleMediaImages.map(img => ({ ...img, type: "image" }));
+      } else if (selectedMediaTab === "Video") {
+        displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+          ? deviceMedias.filter(item => item.type === "video")
+          : sampleMediaVideos.map(vid => ({ ...vid, type: "video" }));
+      } else if (selectedMediaTab === "Audio") {
+        displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+          ? deviceMedias.filter(item => item.type === "audio")
+          : sampleMediaAudio.map(aud => ({ ...aud, type: "audio" }));
+      }
+    }
+    return displayItems;
+  }, [currentMediaFolder, selectedMediaTab, deviceMedias]);
 
   const fetchRealDeviceMedia = async () => {
     if (!Capacitor.isNativePlatform()) {
@@ -993,7 +1638,7 @@ export default function App() {
             if (readResult && readResult.files) {
               for (const fileItem of readResult.files) {
                 const fileName = typeof fileItem === 'string' ? fileItem : fileItem.name;
-                const filePath = typeof fileItem === 'string' ? `${dir.path}/${fileItem}` : (fileItem.path || `${dir.path}/${fileItem.name}`);
+                const filePath = typeof fileItem === 'string' ? `${dir.path}/${fileItem}` : ((fileItem as any).path || `${dir.path}/${fileItem.name}`);
                 const fileType = typeof fileItem === 'string' ? 'file' : fileItem.type;
 
                 if (fileType === 'directory') continue;
@@ -1468,13 +2113,79 @@ export default function App() {
   const [exportBitrate, setExportBitrate] = useState("High");
   const [exportOpticalFlow, setExportOpticalFlow] = useState(true);
   const [erroredClips, setErroredClips] = useState<Set<string>>(new Set());
+  const relinkedClipsRef = useRef<Set<string>>(new Set());
 
   const handleClipError = (clipId: string) => {
-    setErroredClips((prev) => {
-      if (prev.has(clipId)) return prev;
-      const newSet = new Set(prev);
-      newSet.add(clipId);
-      return newSet;
+    // Prevent infinite loops if fallback source itself experiences error
+    if (relinkedClipsRef.current.has(clipId)) {
+      setErroredClips((prev) => {
+        if (prev.has(clipId)) return prev;
+        const newSet = new Set(prev);
+        newSet.add(clipId);
+        return newSet;
+      });
+      return;
+    }
+
+    relinkedClipsRef.current.add(clipId);
+
+    setClips((prev) => {
+      let foundAndFixed = false;
+      let matchedName = "";
+      const updatedClips = prev.map((c) => {
+        if (c.id === clipId) {
+          let fallbackSrc = "";
+          if (c.type === "video") {
+            const matchingVideo = sampleMediaVideos.find((vid) => 
+              vid.name.toLowerCase() === c.name?.toLowerCase() || 
+              (c.src && vid.url.split('/').pop() === c.src.split('/').pop())
+            ) || sampleMediaVideos[0];
+            fallbackSrc = matchingVideo?.url || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4";
+            matchedName = matchingVideo?.name || "Alpine Peaks";
+          } else if (c.type === "image") {
+            const matchingImage = sampleMediaImages.find((img) => 
+              img.name.toLowerCase() === c.name?.toLowerCase() ||
+              (c.src && img.url.split('/').pop() === c.src.split('/').pop())
+            ) || sampleMediaImages[0];
+            fallbackSrc = matchingImage?.url || "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600";
+            matchedName = matchingImage?.name || "Mountain Peak";
+          } else if (c.type === "audio") {
+            const matchingAudio = sampleMediaAudio.find((aud) => 
+              aud.name.toLowerCase() === c.name?.toLowerCase() ||
+              (c.src && aud.url.split('/').pop() === c.src.split('/').pop())
+            ) || sampleMediaAudio[0];
+            fallbackSrc = matchingAudio?.url || "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+            matchedName = matchingAudio?.name || "Serene Nature";
+          }
+
+          if (fallbackSrc && c.src !== fallbackSrc) {
+            foundAndFixed = true;
+            return {
+              ...c,
+              src: fallbackSrc,
+              originalSrc: fallbackSrc,
+            };
+          }
+        }
+        return c;
+      });
+
+      if (foundAndFixed) {
+        showToast(`Auto-relinked "${matchedName}" from cloud sources`);
+        // Remove from error set to attempt reload
+        setErroredClips((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(clipId);
+          return newSet;
+        });
+      } else {
+        setErroredClips((prev) => {
+          const newSet = new Set(prev);
+          newSet.add(clipId);
+          return newSet;
+        });
+      }
+      return updatedClips;
     });
   };
 
@@ -1610,6 +2321,128 @@ export default function App() {
         cancelAnimationFrame(animationFrameRef.current);
     };
   }, [pixelsPerSecond]);
+
+  // Global Keyboard Shortcuts for Pro Editing Capabilities
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is writing in any text fields
+      const activeEl = document.activeElement;
+      if (activeEl) {
+        const tag = activeEl.tagName.toLowerCase();
+        if (
+          tag === "input" ||
+          tag === "textarea" ||
+          activeEl.hasAttribute("contenteditable")
+        ) {
+          return;
+        }
+      }
+
+      // 1. Play / Pause
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        setIsPlaying((prev) => !prev);
+      }
+
+      // 2. Delete clip
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault();
+          deleteSelectedClip();
+          showToast(`Deleted ${selectedClipIds.length} clip(s)`);
+        }
+      }
+
+      // 3. Split clip (Hotkey: 's')
+      if (e.key === "s" || e.key === "S") {
+        if (selectedClipId) {
+          e.preventDefault();
+          splitSelectedClip();
+          showToast("Clip split completed");
+        }
+      }
+
+      // 4. Undo / Redo
+      if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
+        if (!e.shiftKey) {
+          e.preventDefault();
+          if (historyIndex > 0) {
+            undo();
+            showToast("Undo");
+          }
+        } else {
+          e.preventDefault();
+          if (historyIndex < history.length - 1) {
+            redo();
+            showToast("Redo");
+          }
+        }
+      }
+
+      // 5. Redo (Cmd+Y or Ctrl+Y)
+      if ((e.metaKey || e.ctrlKey) && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        if (historyIndex < history.length - 1) {
+          redo();
+          showToast("Redo");
+        }
+      }
+
+      // 6. Navigation Seeking (ArrowLeft / ArrowRight)
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const delta = e.shiftKey ? 5 : 0.5;
+        setCurrentTime((prev) => {
+          const next = Math.max(0, prev - delta);
+          if (timelineScrollRef.current) {
+            const container = timelineScrollRef.current;
+            container.scrollLeft = Math.max(0, next * pixelsPerSecond - playheadXRef.current);
+          }
+          return next;
+        });
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const delta = e.shiftKey ? 5 : 0.5;
+        setCurrentTime((prev) => {
+          const next = prev + delta;
+          if (timelineScrollRef.current) {
+            const container = timelineScrollRef.current;
+            container.scrollLeft = Math.max(0, next * pixelsPerSecond - playheadXRef.current);
+          }
+          return next;
+        });
+      }
+
+      // 7. Zoom Hotkeys (Plus / Minus)
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setZoomLevel((prev) => Math.min(10, prev + 0.25));
+        showToast("Zoom In");
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        setZoomLevel((prev) => Math.max(0.1, prev - 0.25));
+        showToast("Zoom Out");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    selectedClipId,
+    selectedClipIds,
+    isPlaying,
+    historyIndex,
+    history.length,
+    pixelsPerSecond,
+    deleteSelectedClip,
+    splitSelectedClip,
+    undo,
+    redo,
+  ]);
 
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -2100,6 +2933,14 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.hide().catch((err) => {
+        console.warn("Failed to hide StatusBar:", err);
+      });
+    }
+  }, []);
+
   const createProject = (ratio: string) => {
     const newProjectId = Math.random().toString(36).substring(2, 9);
     const newProject: Project = {
@@ -2160,27 +3001,98 @@ export default function App() {
   const openProject = async (project: Project) => {
     // Show some loading indicator if needed here, but since it's local it should be fast
     let resolvedClips = project.clips || [];
-    try {
-      const { getFile } = await import("./lib/db");
-      resolvedClips = await Promise.all(
-        resolvedClips.map(async (c) => {
-          if (c.fileId) {
-            const blob = await getFile(c.fileId);
-            if (blob) {
-              const url = URL.createObjectURL(blob);
-              return { ...c, src: url, originalSrc: c.originalSrc ? url : undefined };
-            }
+    let resolvedLayers = project.layers || [];
+
+    // Auto-populate default sample projects if they have no tracks or clips
+    if (resolvedClips.length === 0) {
+      if (project.id === "1") {
+        resolvedLayers = [
+          { id: "L_v1", order: 0, isMuted: false, isHidden: false, name: "Video Track" },
+          { id: "L_a1", order: 1, isMuted: false, isHidden: false, name: "Audio Track" }
+        ];
+        resolvedClips = [
+          {
+            id: "v1_clip",
+            layerId: "L_v1",
+            type: "video",
+            src: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+            leftSeconds: 0,
+            durationSeconds: 15,
+            originalDurationSeconds: 15,
+            trimStartSeconds: 0,
+            volume: 100,
+            speed: 1,
+            name: "Alpine Peaks"
+          },
+          {
+            id: "a1_clip",
+            layerId: "L_a1",
+            type: "audio",
+            src: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+            leftSeconds: 0,
+            durationSeconds: 15,
+            originalDurationSeconds: 184,
+            trimStartSeconds: 0,
+            volume: 50,
+            speed: 1,
+            name: "Lofi Beats"
           }
-          return c;
-        })
-      );
-    } catch(err) {
-      console.warn("Could not restore media blobs", err);
+        ];
+      } else if (project.id === "frosted-p") {
+        resolvedLayers = [
+          { id: "L_im1", order: 0, isMuted: false, isHidden: false, name: "Image Track" },
+          { id: "L_tx1", order: 1, isMuted: false, isHidden: false, name: "Text Track" }
+        ];
+        resolvedClips = [
+          {
+            id: "im1_clip",
+            layerId: "L_im1",
+            type: "image",
+            src: "https://images.unsplash.com/photo-1614036417651-efe5912149d8?auto=format&fit=crop&q=80&w=400",
+            leftSeconds: 0,
+            durationSeconds: 10,
+            originalDurationSeconds: 10,
+            trimStartSeconds: 0,
+            name: "Frosted Image"
+          },
+          {
+            id: "tx1_clip",
+            layerId: "L_tx1",
+            type: "text",
+            text: "Cozy Winter",
+            color: "#ffffff",
+            fontSize: 44,
+            textAnimation: "Bounce",
+            leftSeconds: 2,
+            durationSeconds: 6,
+            trimStartSeconds: 0,
+            src: ""
+          }
+        ];
+      }
+    } else {
+      try {
+        const { getFile } = await import("./lib/db");
+        resolvedClips = await Promise.all(
+          resolvedClips.map(async (c) => {
+            if (c.fileId) {
+              const blob = await getFile(c.fileId);
+              if (blob) {
+                const url = URL.createObjectURL(blob);
+                return { ...c, src: url, originalSrc: c.originalSrc ? url : undefined };
+              }
+            }
+            return c;
+          })
+        );
+      } catch(err) {
+        console.warn("Could not restore media blobs", err);
+      }
     }
 
     setActiveProjectId(project.id);
     setCurrentProjectRatio(project.ratio);
-    setLayers(project.layers || []);
+    setLayers(resolvedLayers);
     setClips(resolvedClips);
     setCurrentTime(0);
     setZoomLevel(1);
@@ -2281,28 +3193,7 @@ export default function App() {
     ]);
   };
 
-  const sampleMediaImages = [
-    { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600" },
-    { name: "Forest Fog", url: "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&q=80&w=600" },
-    { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600" },
-    { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600" },
-    { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600" },
-    { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600" },
-  ];
-
-  const sampleMediaVideos = [
-    { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400" },
-    { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400" },
-    { name: "Forest River", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4", duration: 14, thumbnail: "https://images.unsplash.com/photo-1425913397330-cf8af2ff40a1?auto=format&fit=crop&q=80&w=400" },
-    { name: "City Lights", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?auto=format&fit=crop&q=80&w=400" },
-  ];
-
-  const sampleMediaAudio = [
-    { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372 },
-    { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184 },
-    { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302 },
-    { name: "Chill Groove", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3", duration: 251 },
-  ];
+  // Using global sampleMedia static arrays to optimize memory and component allocations
 
   const handleSelectMediaItem = (item: { name: string; url: string; type: "video" | "image" | "audio"; duration?: number; thumbnail?: string }) => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -2476,13 +3367,13 @@ export default function App() {
     }
   };
 
-  const deleteSelectedClip = () => {
+  function deleteSelectedClip() {
     if (selectedClipIds.length > 0) {
       setClips((prev) => prev.filter((c) => !selectedClipIds.includes(c.id)));
       setSelectedClipIds([]);
       // Optional: Cleanup empty layers
     }
-  };
+  }
 
   const handleToggleKeyframe = useCallback(() => {
     if (!selectedClipId) return;
@@ -2556,7 +3447,7 @@ export default function App() {
     }));
   }, [selectedClipId, currentTime, activeExpandedMenu]);
 
-  const splitSelectedClip = () => {
+  function splitSelectedClip() {
     if (!selectedClipId) return;
     const clip = clips.find((c) => c.id === selectedClipId);
     if (!clip) return;
@@ -2568,19 +3459,22 @@ export default function App() {
 
     const firstDuration = currentTime - clip.leftSeconds;
     const newClipId = "C_" + Math.random().toString(36).substring(2, 9);
+    const speed = clip.speed || 1.0;
 
     setClips((prev) => {
       const rest = prev.filter((c) => c.id !== selectedClipId);
       const newClip1 = {
         ...clip,
         durationSeconds: firstDuration,
+        originalDurationSeconds: firstDuration * speed,
       };
       const newClip2 = {
         ...clip,
         id: newClipId,
         leftSeconds: currentTime,
-        trimStartSeconds: clip.trimStartSeconds + firstDuration,
+        trimStartSeconds: clip.trimStartSeconds + firstDuration * speed,
         durationSeconds: clip.durationSeconds - firstDuration,
+        originalDurationSeconds: (clip.durationSeconds - firstDuration) * speed,
       };
       return [...rest, newClip1, newClip2];
     });
@@ -3382,23 +4276,44 @@ export default function App() {
 
         if (activeSelectedIds.length === 1) {
           // Single clip check for overlaps with targetLayerId
-          const hasOverlap = prevClips.some(
+          const potentialLeft = Math.max(0, initialLeftSeconds + effectiveDelta);
+          const hasOverlapTarget = prevClips.some(
             (c) =>
               c.layerId === targetLayerId &&
               !activeSelectedIds.includes(c.id) &&
-              initialLeftSeconds + effectiveDelta < c.leftSeconds + c.durationSeconds &&
-              initialLeftSeconds + effectiveDelta + clip.durationSeconds > c.leftSeconds,
+              potentialLeft < c.leftSeconds + c.durationSeconds &&
+              potentialLeft + clip.durationSeconds > c.leftSeconds,
           );
 
-          let finalLayerId = targetLayerId;
-          if (hasOverlap) finalLayerId = fallbackLayerId;
-          else fallbackLayerId = targetLayerId;
-
-          return prevClips.map((c) =>
-            c.id === clip.id
-              ? { ...c, leftSeconds: Math.max(0, initialLeftSeconds + effectiveDelta), layerId: finalLayerId }
-              : c,
-          );
+          if (!hasOverlapTarget) {
+            // No overlap on target layer, move is completely allowed
+            fallbackLayerId = targetLayerId;
+            return prevClips.map((c) =>
+              c.id === clip.id
+                ? { ...c, leftSeconds: potentialLeft, layerId: targetLayerId }
+                : c,
+            );
+          } else {
+            // There is an overlap on the target layer. Let's see if we can move horizontally on fallback layer
+            const hasOverlapFallback = prevClips.some(
+              (c) =>
+                c.layerId === fallbackLayerId &&
+                !activeSelectedIds.includes(c.id) &&
+                potentialLeft < c.leftSeconds + c.durationSeconds &&
+                potentialLeft + clip.durationSeconds > c.leftSeconds,
+            );
+            if (!hasOverlapFallback) {
+              // No overlap on fallback layer, horizontal move allowed (vertical drag blocked)
+              return prevClips.map((c) =>
+                c.id === clip.id
+                  ? { ...c, leftSeconds: potentialLeft, layerId: fallbackLayerId }
+                  : c,
+              );
+            } else {
+              // Collision on both layers. Completely block drag update for this position to prevent overlap
+              return prevClips;
+            }
+          }
         } else {
           // Multi clip - apply both horizontal delta and relative vertical layer offset!
           const actClipInit = initialClipsData.get(clip.id);
@@ -3406,6 +4321,36 @@ export default function App() {
           const originalLayerIndex = actClipInit ? sortedLayers.findIndex(l => l.id === actClipInit.layer) : -1;
           const targetLayerIndex = sortedLayers.findIndex(l => l.id === targetLayerId);
           const layerOffset = (originalLayerIndex !== -1 && targetLayerIndex !== -1) ? (targetLayerIndex - originalLayerIndex) : 0;
+
+          // Check if ANY of the selected clips would overlap with any non-selected clip
+          const wouldOverlap = prevClips.some((c) => {
+            if (activeSelectedIds.includes(c.id)) return false;
+
+            return activeSelectedIds.some((selId) => {
+              const selClip = prevClips.find(sc => sc.id === selId);
+              const init = initialClipsData.get(selId);
+              if (!selClip || !init) return false;
+
+              const proposedLeft = Math.max(0, init.left + effectiveDelta);
+              const initLayerIndex = sortedLayers.findIndex(l => l.id === init.layer);
+              let proposedLayerId = init.layer;
+              if (initLayerIndex !== -1 && layerOffset !== 0) {
+                const targetIndex = Math.max(0, Math.min(sortedLayers.length - 1, initLayerIndex + layerOffset));
+                proposedLayerId = sortedLayers[targetIndex].id;
+              }
+
+              return (
+                c.layerId === proposedLayerId &&
+                proposedLeft < c.leftSeconds + c.durationSeconds &&
+                proposedLeft + selClip.durationSeconds > c.leftSeconds
+              );
+            });
+          });
+
+          if (wouldOverlap) {
+            // Collision detected for at least one clip in the selection, block the entire drag update
+            return prevClips;
+          }
 
           return prevClips.map((c) => {
             if (activeSelectedIds.includes(c.id)) {
@@ -3520,6 +4465,16 @@ export default function App() {
               const change = newLeft - initialLeftSeconds;
               const newDuration = Math.max(0.5, initialDurationSeconds - change);
               if (newDuration < 0.5) return c; // Clamp
+
+              // Collision check
+              const hasOverlap = prev.some(other =>
+                other.id !== clip.id &&
+                other.layerId === clip.layerId &&
+                newLeft < other.leftSeconds + other.durationSeconds &&
+                newLeft + newDuration > other.leftSeconds
+              );
+              if (hasOverlap) return c;
+
               return {
                 ...c,
                 leftSeconds: newLeft,
@@ -3566,6 +4521,16 @@ export default function App() {
             }
 
             if (newDuration < 0.5) return c; // Clamp
+
+            // Collision check
+            const hasOverlap = prev.some(other =>
+              other.id !== clip.id &&
+              other.layerId === clip.layerId &&
+              Math.max(0, finalLeft) < other.leftSeconds + other.durationSeconds &&
+              Math.max(0, finalLeft) + newDuration > other.leftSeconds
+            );
+            if (hasOverlap) return c;
+
             return {
               ...c,
               leftSeconds: Math.max(0, finalLeft),
@@ -3601,6 +4566,15 @@ export default function App() {
                 });
                 newDuration = Math.max(0.5, snappedRight - initialLeftSeconds);
               }
+
+              // Collision check
+              const hasOverlap = prev.some(other =>
+                other.id !== clip.id &&
+                other.layerId === clip.layerId &&
+                initialLeftSeconds < other.leftSeconds + other.durationSeconds &&
+                initialLeftSeconds + newDuration > other.leftSeconds
+              );
+              if (hasOverlap) return c;
 
               return { ...c, durationSeconds: newDuration, opticalFlow: undefined };
             }
@@ -3641,6 +4615,15 @@ export default function App() {
             if (initialTrimStartSeconds + newDuration * speed > maxAvailableDuration) {
                 newDuration = (maxAvailableDuration - initialTrimStartSeconds) / speed;
             }
+
+            // Collision check
+            const hasOverlap = prev.some(other =>
+              other.id !== clip.id &&
+              other.layerId === clip.layerId &&
+              initialLeftSeconds < other.leftSeconds + other.durationSeconds &&
+              initialLeftSeconds + newDuration > other.leftSeconds
+            );
+            if (hasOverlap) return c;
 
             return { ...c, durationSeconds: newDuration, opticalFlow: undefined };
           }
@@ -3922,17 +4905,19 @@ const renderHome = () => {
             </div>
 
             <div className="flex gap-2">
-              <button
-                onClick={toggleFullscreen}
-                className="w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer"
-                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-              >
-                {isFullscreen ? (
-                  <Minimize2 size={18} className="transition-transform group-hover:scale-110" />
-                ) : (
-                  <Maximize2 size={18} className="transition-transform group-hover:scale-110" />
-                )}
-              </button>
+              {!Capacitor.isNativePlatform() && (
+                <button
+                  onClick={toggleFullscreen}
+                  className="w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer"
+                  title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 size={18} className="transition-transform group-hover:scale-110" />
+                  ) : (
+                    <Maximize2 size={18} className="transition-transform group-hover:scale-110" />
+                  )}
+                </button>
+              )}
 
               <button className="relative w-10 h-10 rounded-full bg-zinc-900/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white hover:border-white/20 transition-all active:scale-95 group cursor-pointer">
                 <Bell size={18} className="transition-transform group-hover:rotate-12" />
@@ -4770,12 +5755,98 @@ const renderEditor = () => (
           
         <div className="flex items-center gap-2 pointer-events-auto">
           <button
-            onClick={toggleFullscreen}
+            onClick={() => setIsShortcutsOpen(true)}
             className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-zinc-800 border border-white/5 hover:bg-zinc-700 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
-            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+            title="Keyboard Shortcuts Cheatsheet"
           >
-            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <Keyboard size={14} />
           </button>
+
+          {!Capacitor.isNativePlatform() && (
+            <button
+              onClick={toggleFullscreen}
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-zinc-800 border border-white/5 hover:bg-zinc-700 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
+              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+            >
+              {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+          )}
+
+          {/* Glossy Interactive Keyboard Shortcuts Cheatsheet Modal */}
+          <AnimatePresence>
+            {isShortcutsOpen && (
+              <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsShortcutsOpen(false)}
+                  className="absolute inset-0 bg-black/60 backdrop-blur-md"
+                />
+                <motion.div
+                  initial={{ scale: 0.95, y: 15, opacity: 0 }}
+                  animate={{ scale: 1, y: 0, opacity: 1 }}
+                  exit={{ scale: 0.95, y: 15, opacity: 0 }}
+                  transition={{ type: "spring", duration: 0.4 }}
+                  className="relative w-full max-w-lg bg-[#18181b]/95 border border-white/10 rounded-3xl p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.8)] overflow-hidden z-[310]"
+                >
+                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-500" />
+                  
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                        <Keyboard size={18} />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white tracking-wide">Keyboard Shortcuts</h3>
+                        <p className="text-[10px] text-zinc-400">Boost your editing speed with professional hotkeys</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setIsShortcutsOpen(false)}
+                      className="w-7 h-7 rounded-full bg-zinc-800 border border-white/5 hover:bg-zinc-700 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Grid of hotkeys */}
+                  <div className="grid grid-cols-2 gap-3.5 max-h-[350px] overflow-y-auto pr-1">
+                    {KEYBOARD_SHORTCUTS.map((item, idx) => (
+                      <div 
+                        key={idx} 
+                        className="flex flex-col justify-between bg-zinc-900/50 hover:bg-zinc-900 border border-white/[0.04] p-3 rounded-2xl transition-colors group text-left"
+                      >
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {item.keys.map((k, kid) => (
+                            <kbd 
+                              key={kid} 
+                              className="px-2 py-0.5 min-w-[20px] text-[10px] font-black font-mono text-zinc-200 bg-zinc-805 border border-zinc-700/80 rounded-md shadow-sm select-none"
+                            >
+                              {k}
+                            </kbd>
+                          ))}
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-semibold text-zinc-100 group-hover:text-white transition-colors">{item.desc}</div>
+                          <div className="text-[8px] font-bold uppercase tracking-wider text-indigo-400/80 mt-0.5">{item.category}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Pro Tip Footer */}
+                  <div className="mt-5 pt-4 border-t border-white/[0.06] flex items-center gap-2.5 text-zinc-400">
+                    <Sparkles size={13} className="text-amber-400 shrink-0" />
+                    <span className="text-[10px] leading-tight font-medium text-left">
+                      <strong>Pro Tip:</strong> Hold <kbd className="px-1 py-0.2 text-[8.5px] font-mono bg-zinc-800 text-zinc-350 border border-zinc-750 rounded shadow-sm">Shift</kbd> during Arrow keys seeks to jump <strong>5x faster</strong>!
+                    </span>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
           
           <div className="relative">
             <button
@@ -5033,7 +6104,9 @@ const renderEditor = () => (
                         : (clipPathVal !== "none" ? clipPathVal : `inset(${activeClip.cropRect?.top || 0}% ${activeClip.cropRect?.right || 0}% ${activeClip.cropRect?.bottom || 0}% ${activeClip.cropRect?.left || 0}%)`),
                       opacity: (activeClip.opacity ?? 1) * transitionOpacityMultiplier,
                       mixBlendMode: activeClip.mixBlendMode as any || "normal",
-                      filter: `
+                      filter: isPlaying
+                        ? `brightness(${(activeClip.brightness === undefined ? 100 : activeClip.brightness) + (activeClip.exposure || 0)}%) contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%) saturate(${activeClip.saturation === undefined ? 100 : activeClip.saturation}%)`
+                        : `
                         blur(${(activeClip.blur || 0) + extraBlur}px)
                         brightness(${(activeClip.brightness === undefined ? 100 : activeClip.brightness) + (activeClip.exposure || 0)}%)
                         contrast(${activeClip.contrast === undefined ? 100 : activeClip.contrast}%)
@@ -5407,99 +6480,21 @@ const renderEditor = () => (
                       )}
 
                       {selectedMediaTab === "Folders" && !currentMediaFolder ? (
-                        (() => {
-                          const foldersMap: { [key: string]: { count: number; icon: string } } = {};
-                          if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
-                            deviceMedias.forEach(item => {
-                              const folderName = item.folder || "Camera Roll";
-                              if (!foldersMap[folderName]) {
-                                let icon = "📁";
-                                if (folderName.toLowerCase().includes("download")) icon = "📥";
-                                else if (folderName.toLowerCase().includes("camera") || folderName.toLowerCase().includes("dcim")) icon = "📸";
-                                else if (folderName.toLowerCase().includes("record") || folderName.toLowerCase().includes("audio")) icon = "🎙️";
-                                else if (folderName.toLowerCase().includes("screenshot")) icon = "🖼️";
-                                else if (folderName.toLowerCase().includes("telegram") || folderName.toLowerCase().includes("whatsapp")) icon = "💬";
-                                foldersMap[folderName] = { count: 0, icon };
-                              }
-                              foldersMap[folderName].count++;
-                            });
-                          }
-                          const folderList = Object.keys(foldersMap).length > 0 
-                            ? Object.keys(foldersMap).map(name => ({
-                                name,
-                                count: foldersMap[name].count,
-                                icon: foldersMap[name].icon
-                              }))
-                            : [
-                                { name: "Camera Roll", count: 4, icon: "📁" },
-                                { name: "Downloads", count: 2, icon: "📥" },
-                                { name: "Audio Recordings", count: 2, icon: "🎙️" },
-                                { name: "Screenshots", count: 2, icon: "📸" },
-                              ];
-
-                          return folderList.map((fold) => (
-                            <div
-                              key={fold.name}
-                              onClick={() => setCurrentMediaFolder(fold.name)}
-                              className="bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-white/[0.1] active:scale-95 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all h-28 shadow-lg group"
-                            >
-                              <span className="text-2xl group-hover:scale-110 transition-all self-start">{fold.icon}</span>
-                              <div className="flex flex-col">
-                                <span className="text-[11px] font-extrabold text-zinc-250 group-hover:text-white truncate">{fold.name}</span>
-                                <span className="text-[8px] text-zinc-500 font-semibold">{fold.count} items</span>
-                              </div>
+                        memoizedMediaFolders.map((fold) => (
+                          <div
+                            key={fold.name}
+                            onClick={() => setCurrentMediaFolder(fold.name)}
+                            className="bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-white/[0.1] active:scale-95 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all h-28 shadow-lg group"
+                          >
+                            <span className="text-2xl group-hover:scale-110 transition-all self-start">{fold.icon}</span>
+                            <div className="flex flex-col">
+                              <span className="text-[11px] font-extrabold text-zinc-250 group-hover:text-white truncate">{fold.name}</span>
+                              <span className="text-[8px] text-zinc-500 font-semibold">{fold.count} items</span>
                             </div>
-                          ));
-                        })()
+                          </div>
+                        ))
                       ) : (
-                        (() => {
-                          let displayItems: any[] = [];
-                          
-                          if (currentMediaFolder) {
-                            if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
-                              displayItems = deviceMedias.filter(item => item.folder === currentMediaFolder);
-                            } else {
-                              if (currentMediaFolder === "Camera Roll") {
-                                displayItems = [
-                                  { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400", type: "video" },
-                                  { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400", type: "video" },
-                                  { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                  { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                ];
-                              } else if (currentMediaFolder === "Downloads") {
-                                displayItems = [
-                                  { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184, type: "audio" },
-                                  { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                ];
-                              } else if (currentMediaFolder === "Audio Recordings") {
-                                displayItems = [
-                                  { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372, type: "audio" },
-                                  { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302, type: "audio" },
-                                ];
-                              } else if (currentMediaFolder === "Screenshots") {
-                                displayItems = [
-                                  { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                  { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                ];
-                              }
-                            }
-                          } else {
-                            if (selectedMediaTab === "Image") {
-                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
-                                ? deviceMedias.filter(item => item.type === "image")
-                                : sampleMediaImages.map(img => ({ ...img, type: "image" }));
-                            } else if (selectedMediaTab === "Video") {
-                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
-                                ? deviceMedias.filter(item => item.type === "video")
-                                : sampleMediaVideos.map(vid => ({ ...vid, type: "video" }));
-                            } else if (selectedMediaTab === "Audio") {
-                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
-                                ? deviceMedias.filter(item => item.type === "audio")
-                                : sampleMediaAudio.map(aud => ({ ...aud, type: "audio" }));
-                            }
-                          }
-
-                          return displayItems.map((item, idx) => {
+                        memoizedDisplayItems.map((item, idx) => {
                             if (item.type === "image") {
                               return (
                                 <div
@@ -5578,9 +6573,8 @@ const renderEditor = () => (
                                 </div>
                               );
                             }
-                          });
-                        })()
-                      )}
+                          })
+                        )}
 
                     </div>
                   </div>
@@ -5850,7 +6844,9 @@ const renderEditor = () => (
       <div className="h-px bg-transparent relative z-[80]"></div>
 
       {/* Editor Timeline Space */}
-      <div className="h-[40vh] shrink-0 bg-[#171719] flex flex-col relative w-full select-none z-0 overflow-hidden rounded-t-[20px] sm:rounded-t-[24px] border-t border-white/10 shadow-[0_-12px_40px_rgba(0,0,0,0.45)]">
+      <div 
+        className="h-[40vh] shrink-0 bg-[#171719] flex flex-col relative w-full select-none z-0 overflow-hidden border-t border-white/10 shadow-[0_-12px_40px_rgba(0,0,0,0.45)]"
+      >
         {/* Timeline Content Flex Container */}
         <div
           id="master-vertical-scroll"
@@ -5859,10 +6855,18 @@ const renderEditor = () => (
           style={{ touchAction: "pan-x pan-y" }}
           onScroll={(e) => {
             if (!isPlayingRef.current) {
-              setCurrentTime(
-                (e.currentTarget.scrollLeft + playheadXRef.current) /
-                  currentPixelsPerSecondRef.current,
-              );
+              const currentTarget = e.currentTarget;
+              if ((currentTarget as any)._rafScrollScheduled) return;
+              (currentTarget as any)._rafScrollScheduled = true;
+              requestAnimationFrame(() => {
+                if (currentTarget) {
+                  (currentTarget as any)._rafScrollScheduled = false;
+                  setCurrentTime(
+                    (currentTarget.scrollLeft + playheadXRef.current) /
+                      currentPixelsPerSecondRef.current
+                  );
+                }
+              });
             }
           }}
         >
@@ -6078,11 +7082,11 @@ const renderEditor = () => (
               </div>
             </div>
 
-            {/* STATIONARY PLAYHEAD (Now perfectly aligned with upgraded pro glow) */}
+            {/* STATIONARY PLAYHEAD (Now perfectly aligned with upgraded pro glow with 3D GPU layer promotion) */}
             {layers.length > 0 && (
               <div
                 className="sticky top-0 left-[100px] pointer-events-none z-[60] w-0 h-0"
-                style={{ transform: `translateX(${playheadX}px)` }}
+                style={{ transform: `translate3d(${playheadX}px, 0, 0)`, willChange: "transform" }}
               >
                 <div className="absolute top-0 -translate-x-1/2 flex flex-col items-center">
                   {/* Upgraded micro-precision glossy neon playhead cap */}
@@ -6113,6 +7117,9 @@ const renderEditor = () => (
                     setIsPlaying(false);
                     const target = e.currentTarget;
                     target.setPointerCapture(e.pointerId);
+
+                    let pendingClientX = e.clientX;
+                    let rafScheduled = false;
 
                     const updateSeek = (clientX: number) => {
                       const innerRect = document.getElementById("timeline-inner")?.getBoundingClientRect();
@@ -6151,7 +7158,14 @@ const renderEditor = () => (
                     updateSeek(e.clientX);
 
                     const handlePointerMove = (moveEvent: PointerEvent) => {
-                      updateSeek(moveEvent.clientX);
+                      pendingClientX = moveEvent.clientX;
+                      if (!rafScheduled) {
+                        rafScheduled = true;
+                        requestAnimationFrame(() => {
+                          rafScheduled = false;
+                          updateSeek(pendingClientX);
+                        });
+                      }
                     };
                     const handlePointerUp = (upEvent: PointerEvent) => {
                       target.releasePointerCapture(upEvent.pointerId);
@@ -6171,54 +7185,11 @@ const renderEditor = () => (
                       width: `${maxTimelineDuration * pixelsPerSecond}px`,
                     }}
                   >
-                    {Array.from({ length: Math.ceil(maxTimelineDuration) }).map(
-                      (_, i) => {
-                        let step = 1;
-                        if (pixelsPerSecond < 2) step = 300; // marks every 5 mins
-                        else if (pixelsPerSecond < 5) step = 60; // marks every 1 min
-                        else if (pixelsPerSecond < 10) step = 30; // very zoomed out
-                        else if (pixelsPerSecond < 20) step = 10;
-                        else if (pixelsPerSecond < 35) step = 5;
-                        else if (pixelsPerSecond < 70) step = 2; // normal default is 100
-                        
-                        const showText = i % step === 0;
-
-                        // Skip rendering the tick entirely if it's too squished
-                        const hideTick = pixelsPerSecond < 2 ? i % 60 !== 0 : (pixelsPerSecond < 5 ? i % 10 !== 0 : false);
-                        if (hideTick) return null;
-
-                        return (
-                          <div
-                            key={i}
-                            className="absolute h-full border-l border-zinc-700/60 pointer-events-none"
-                            style={{ left: `${i * pixelsPerSecond}px` }}
-                          >
-                            {showText && (
-                              <span
-                                className="absolute -left-[4px] top-[3px] text-[8px] sm:text-[8.5px] text-zinc-400 hover:text-zinc-200 font-semibold font-mono tracking-wider pl-1 bg-transparent px-1 rounded line-height-none leading-none select-none transition-colors"
-                                style={{ textShadow: "none" }}
-                              >
-                                {i < 60 ? i.toString() : `${Math.floor(i/60)}:${(i%60).toString().padStart(2,"0")}`}
-                              </span>
-                            )}
-                            {/* Sub-ticks for zoom */}
-                            {zoomLevel >= 3 && Array.from({ length: 9 }).map((_, subIndex) => {
-                              const isHalf = subIndex === 4;
-                              return (
-                                <div
-                                  key={subIndex}
-                                  className={`absolute bottom-0 w-[1px] ${isHalf ? "bg-zinc-650" : "bg-zinc-800/80"} pointer-events-none`}
-                                  style={{
-                                    left: `${(subIndex + 1) * (pixelsPerSecond / 10)}px`,
-                                    height: isHalf ? "8px" : "4px",
-                                  }}
-                                />
-                              );
-                            })}
-                          </div>
-                        );
-                      }
-                    )}
+                    <TimelineRulerTicks
+                      maxTimelineDuration={maxTimelineDuration}
+                      pixelsPerSecond={pixelsPerSecond}
+                      zoomLevel={zoomLevel}
+                    />
                   </div>
                 </div>
               )}
@@ -6433,8 +7404,35 @@ const renderEditor = () => (
                             }}
                           />
 
-                          {/* Render Clips for this layer */}
+                          {/* Render Clips for this layer with active viewport virtualization */}
                           {clips
+                            .filter((c) => {
+                              if (c.layerId !== layer.id) return false;
+                              const scrollLeft = currentTime * pixelsPerSecond - playheadX;
+                              const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1200;
+                              const visibleStart = Math.max(0, scrollLeft - 850) / pixelsPerSecond;
+                              const visibleEnd = (scrollLeft + viewportWidth + 850) / pixelsPerSecond;
+                              return (c.leftSeconds + c.durationSeconds >= visibleStart) && (c.leftSeconds <= visibleEnd);
+                            })
+                            .map((clip) => (
+                              <TimelineClipItem
+                                key={clip.id}
+                                clip={clip}
+                                pixelsPerSecond={pixelsPerSecond}
+                                isCompactMode={isCompactMode}
+                                selectedClipIds={selectedClipIds}
+                                selectedClipId={selectedClipId}
+                                layerHiddenOrMuted={layer.isHidden || (layer.isMuted && clip.type === "audio")}
+                                activeExpandedMenu={activeExpandedMenu}
+                                currentTime={currentTime}
+                                isErrored={erroredClips.has(clip.id)}
+                                onPointerDown={handleClipDragStart}
+                                onClipError={handleClipError}
+                                onTrimStart={handleTrimStart}
+                              />
+                            ))}
+
+                          {false && clips
                             .filter((c) => c.layerId === layer.id)
                             .map((clip) => (
                               <div
@@ -6960,7 +7958,7 @@ const renderEditor = () => (
             layoutId="new-project-btn"
             layout
             transition={{ type: "spring", bounce: 0.5, duration: 0.6 }}
-            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#0d0d12]/95 backdrop-blur-xl overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : activeExpandedMenu ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.7),_0_0_20px_rgba(99,102,241,0.06)] border border-white/10 z-[200] transform-gpu`}
+            className={`fixed bottom-0 mt-[0px] mb-[60px] left-1/2 -translate-x-1/2 flex flex-col bg-[#0d0d12]/95 backdrop-blur-xl overflow-hidden ${activeExpandedMenu === "speed-curves" ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : activeExpandedMenu === "move" ? "rounded-[24px] pt-1.5 pb-1.5 w-[218px]" : (activeExpandedMenu && activeExpandedMenu !== "plus-media") ? "rounded-[24px] pt-1.5 pb-1 w-[218px]" : "rounded-[24px] h-[50px] justify-center w-[218px]"} shadow-[0_20px_50px_rgba(0,0,0,0.7),_0_0_20px_rgba(99,102,241,0.06)] border border-white/10 z-[200] transform-gpu`}
           >
             <AnimatePresence mode="popLayout">
               {activeExpandedMenu === "transition" && transitionModal && (() => {
@@ -8777,11 +9775,11 @@ const renderEditor = () => (
             <motion.div
               layout
               transition={{ type: "spring", bounce: 0, duration: 0.4 }}
-              className={`flex items-center gap-1 px-1.5 justify-center ${activeExpandedMenu === "plus-media" ? "w-[240px]" : "w-[218px]"} transition-[width] duration-300`}
+              className="flex items-center gap-1 px-1.5 justify-center w-[218px]"
             >
               <motion.button
                 layout
-                className={`p-1 shrink-0 rounded-full flex items-center justify-center transition-all duration-300 ${activeExpandedMenu === "plus-media" ? "bg-indigo-600 text-white rotate-45 animate-pulse" : "hover:bg-zinc-700 text-zinc-300"}`}
+                className={`p-1 shrink-0 rounded-full flex items-center justify-center transition-all duration-300 ${activeExpandedMenu === "plus-media" ? "bg-indigo-600 text-white rotate-45" : "hover:bg-zinc-700 text-zinc-300"}`}
                 onClick={() => {
                   if (activeExpandedMenu === "plus-media") {
                     setActiveExpandedMenu(null);
@@ -8798,13 +9796,13 @@ const renderEditor = () => (
               ></motion.div>
 
               {activeExpandedMenu === "plus-media" ? (
-                /* 4 New Options on Flowbar: Image, Video, Audio, Folders */
-                <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide w-[184px] overflow-hidden shrink-0 snap-x snap-mandatory animate-fade-in font-sans">
+                /* 4 Compact Logos on Flowbar: Image, Video, Audio, Folders */
+                <div className="flex items-center justify-between w-[164px] shrink-0 px-2 animate-fade-in">
                   {[
-                    { id: "Image", icon: <ImageIcon size={11} className="text-zinc-350" /> },
-                    { id: "Video", icon: <Play size={11} className="text-red-400 rotate-90" /> },
-                    { id: "Audio", icon: <Music size={11} className="text-purple-400" /> },
-                    { id: "Folders", icon: <Layers size={11} className="text-emerald-400" /> }
+                    { id: "Image", icon: <ImageIcon size={14} /> },
+                    { id: "Video", icon: <Play size={14} className="rotate-90" /> },
+                    { id: "Audio", icon: <Music size={14} /> },
+                    { id: "Folders", icon: <Folder size={14} /> }
                   ].map((tab) => {
                     const isActive = selectedMediaTab === tab.id;
                     return (
@@ -8815,14 +9813,14 @@ const renderEditor = () => (
                           setSelectedMediaTab(tab.id as any);
                           setCurrentMediaFolder(null); // Back to folder overview list
                         }}
-                        className={`px-2 py-0.5 shrink-0 rounded-lg text-[8px] font-extrabold tracking-tight flex items-center gap-1 transition-all duration-200 cursor-pointer border ${
+                        className={`p-1 shrink-0 rounded-full flex items-center justify-center transition-colors duration-200 cursor-pointer ${
                           isActive 
-                            ? "bg-indigo-600/30 text-indigo-300 border-indigo-500/35 scale-102" 
-                            : "bg-[#18181c] hover:bg-zinc-800 text-zinc-400 border-transparent"
+                            ? "bg-zinc-700 text-white" 
+                            : "text-zinc-400 hover:bg-zinc-700 hover:text-white"
                         }`}
+                        title={tab.id}
                       >
                         {tab.icon}
-                        <span>{tab.id}</span>
                       </button>
                     );
                   })}

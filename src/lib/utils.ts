@@ -21,6 +21,9 @@ export function solveCubicBezier(x1: number, y1: number, x2: number, y2: number,
   return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
 }
 
+const sortedKeyframesCache = new WeakMap<Keyframe[], Keyframe[]>();
+const filteredKeyframesCache = new WeakMap<Keyframe[], Map<string, Keyframe[]>>();
+
 export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu: string | null) {
   const normVolume = (v: number | undefined) => {
     if (v === undefined) return 100;
@@ -66,7 +69,17 @@ export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu:
     return baseProps;
   }
 
-  const kfs = [...clip.keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
+  let kfs = sortedKeyframesCache.get(clip.keyframes);
+  if (!kfs) {
+    kfs = [...clip.keyframes].sort((a, b) => a.timeOffset - b.timeOffset);
+    sortedKeyframesCache.set(clip.keyframes, kfs);
+  }
+
+  let propMap = filteredKeyframesCache.get(kfs);
+  if (!propMap) {
+    propMap = new Map();
+    filteredKeyframesCache.set(kfs, propMap);
+  }
 
   // We isolate keyframes by their provided animated property explicitly, allowing non-destructive engine design
   const getInterpolatedValue = (
@@ -75,7 +88,11 @@ export function getInterpolatedProps(clip: Clip, timeInClip: number, activeMenu:
     fallbackDefault: number
   ) => {
     // Determine active keyframes per property specifically
-    const activeKfs = kfs.filter(k => k.properties[propName] !== undefined);
+    let activeKfs = propMap!.get(propName);
+    if (!activeKfs) {
+      activeKfs = kfs!.filter(k => k.properties[propName] !== undefined);
+      propMap!.set(propName, activeKfs);
+    }
     
     if (activeKfs.length === 0) {
       return clipValue;

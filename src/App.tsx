@@ -913,42 +913,141 @@ export default function App() {
       return;
     }
     setIsMediaLoading(true);
+    let scannedList: any[] = [];
+    let usedFilesystemScanner = false;
+
     try {
       const mediaAny = Media as any;
       if (typeof mediaAny.checkPermissions === "function") {
-        const check = await mediaAny.checkPermissions();
-        if (check.publicStorage !== "granted" && check.publicStorage13Plus !== "granted") {
-          const req = await mediaAny.requestPermissions();
-          if (req.publicStorage !== "granted" && req.publicStorage13Plus !== "granted") {
-            showToast("Gallery storage permission denied.");
-            setIsMediaLoading(false);
-            return;
+        try {
+          const check = await mediaAny.checkPermissions();
+          const hasLegacy = check.publicStorage === "granted";
+          const hasModern = check.publicStorage13Plus === "granted";
+          
+          if (!hasLegacy && !hasModern) {
+            if (typeof mediaAny.requestPermissions === "function") {
+              const req = await mediaAny.requestPermissions();
+              const reqLegacy = req.publicStorage === "granted";
+              const reqModern = req.publicStorage13Plus === "granted";
+              if (!reqLegacy && !reqModern) {
+                showToast("Gallery storage permission not granted. Standard picker will be used.");
+              }
+            }
           }
+        } catch (permErr) {
+          console.warn("Storage permission request failed, using fallback picker", permErr);
         }
       }
       setIsMediaPermissionGranted(true);
 
-      const result = await Media.getMedias();
-      if (result && result.medias) {
-        const mapped = result.medias.map((item: any) => {
-          const convertedUrl = Capacitor.convertFileSrc(item.path || item.identifier);
-          return {
-            name: item.name || "Media File",
-            path: item.path || item.identifier,
-            url: convertedUrl,
-            type: item.type || "video",
-            folder: item.folder || "Camera Roll",
-            duration: item.duration || 10,
-            thumbnail: item.type === "video" ? undefined : convertedUrl,
-          };
-        });
+      try {
+        const result = await Media.getMedias();
+        if (result && result.medias && result.medias.length > 0) {
+          scannedList = result.medias.map((item: any) => {
+            const convertedUrl = Capacitor.convertFileSrc(item.path || item.identifier);
+            return {
+              name: item.name || "Media File",
+              path: item.path || item.identifier,
+              url: convertedUrl,
+              type: item.type || "video",
+              folder: item.folder || "Camera Roll",
+              duration: item.duration || 10,
+              thumbnail: item.type === "video" ? undefined : convertedUrl,
+            };
+          });
+        } else {
+          // If empty, let's trigger the filesystem scanner fallback
+          usedFilesystemScanner = true;
+        }
+      } catch (scanErr) {
+        console.warn("System background scanner bypassed. Standard API unimplemented or failed, falling back to Filesystem scanner.", scanErr);
+        usedFilesystemScanner = true;
+      }
 
-        const cleanList = mapped.filter((item: any) => item.path);
-        setDeviceMedias(cleanList);
+      if (usedFilesystemScanner) {
+        try {
+          const fsPermissions = await Filesystem.checkPermissions();
+          if (fsPermissions.publicStorage !== 'granted') {
+            await Filesystem.requestPermissions();
+          }
+        } catch (fsPermErr) {
+          console.warn("Filesystem permission request failed or skipped:", fsPermErr);
+        }
+
+        const directoriesToScan = [
+          { name: "DCIM/Camera", path: "DCIM/Camera", folder: "Camera Roll" },
+          { name: "DCIM", path: "DCIM", folder: "Camera Roll" },
+          { name: "Pictures", path: "Pictures", folder: "Screenshots" },
+          { name: "Movies", path: "Movies", folder: "Camera Roll" },
+          { name: "Download", path: "Download", folder: "Downloads" },
+          { name: "Music", path: "Music", folder: "Audio Recordings" }
+        ];
+
+        for (const dir of directoriesToScan) {
+          try {
+            const readResult = await Filesystem.readdir({
+              path: dir.path,
+              directory: Directory.ExternalStorage
+            });
+
+            if (readResult && readResult.files) {
+              for (const fileItem of readResult.files) {
+                const fileName = typeof fileItem === 'string' ? fileItem : fileItem.name;
+                const filePath = typeof fileItem === 'string' ? `${dir.path}/${fileItem}` : (fileItem.path || `${dir.path}/${fileItem.name}`);
+                const fileType = typeof fileItem === 'string' ? 'file' : fileItem.type;
+
+                if (fileType === 'directory') continue;
+
+                const lowerName = fileName.toLowerCase();
+                let mediaType: "video" | "image" | "audio" | null = null;
+
+                if (lowerName.endsWith(".mp4") || lowerName.endsWith(".mov") || lowerName.endsWith(".3gp") || lowerName.endsWith(".webm") || lowerName.endsWith(".mkv")) {
+                  mediaType = "video";
+                } else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || lowerName.endsWith(".png") || lowerName.endsWith(".gif") || lowerName.endsWith(".webp") || lowerName.endsWith(".bmp")) {
+                  mediaType = "image";
+                } else if (lowerName.endsWith(".mp3") || lowerName.endsWith(".wav") || lowerName.endsWith(".ogg") || lowerName.endsWith(".aac") || lowerName.endsWith(".m4a")) {
+                  mediaType = "audio";
+                }
+
+                if (mediaType) {
+                  try {
+                    const uriResult = await Filesystem.getUri({
+                      path: filePath,
+                      directory: Directory.ExternalStorage
+                    });
+                    const convertedUrl = Capacitor.convertFileSrc(uriResult.uri);
+
+                    scannedList.push({
+                      name: fileName,
+                      path: uriResult.uri,
+                      url: convertedUrl,
+                      type: mediaType,
+                      folder: dir.folder,
+                      duration: mediaType === "audio" ? 180 : 10,
+                      thumbnail: mediaType === "image" ? convertedUrl : undefined,
+                    });
+                  } catch (uriErr) {
+                    console.warn(`Could not get URI for ${filePath}:`, uriErr);
+                  }
+                }
+              }
+            }
+          } catch (rErr) {
+            console.warn(`Filesystem scan of ${dir.path} skipped or empty:`, rErr);
+          }
+        }
+      }
+
+      if (scannedList.length > 0) {
+        setDeviceMedias((prev) => {
+          const existingPaths = new Set(prev.map(p => p.path));
+          const nonDupScanned = scannedList.filter((item: any) => !existingPaths.has(item.path));
+          return [...prev, ...nonDupScanned];
+        });
       }
     } catch (err) {
       console.error("Local storage scanner failed:", err);
-      showToast("Access native storage failed.");
+      setIsMediaPermissionGranted(true);
     } finally {
       setIsMediaLoading(false);
     }
@@ -1517,35 +1616,6 @@ export default function App() {
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
   const [exportedVideoBlob, setExportedVideoBlob] = useState<Blob | null>(null);
   const [isSavingToGallery, setIsSavingToGallery] = useState(false);
-
-  const [isExportVideoPlaying, setIsExportVideoPlaying] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const glowVideoRef = useRef<HTMLVideoElement>(null);
-
-  const handlePlayPause = () => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play().catch(() => {});
-      if (glowVideoRef.current) {
-        glowVideoRef.current.play().catch(() => {});
-      }
-      setIsExportVideoPlaying(true);
-    } else {
-      videoRef.current.pause();
-      if (glowVideoRef.current) {
-        glowVideoRef.current.pause();
-      }
-      setIsExportVideoPlaying(false);
-    }
-  };
-
-  const handleTimeUpdate = () => {
-    if (videoRef.current && glowVideoRef.current) {
-      if (Math.abs(videoRef.current.currentTime - glowVideoRef.current.currentTime) > 0.15) {
-        glowVideoRef.current.currentTime = videoRef.current.currentTime;
-      }
-    }
-  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -2312,6 +2382,19 @@ export default function App() {
     const fileId = "F_" + Math.random().toString(36).substring(2, 9);
     const startAtTime = currentTime;
 
+    const addToLibrary = (finalDuration: number) => {
+      const newItem = {
+        name: file.name,
+        path: fileId,
+        url: src,
+        type: type,
+        folder: type === "image" ? "Camera Roll" : type === "audio" ? "Audio Recordings" : "Videos",
+        duration: finalDuration,
+        thumbnail: type === "image" ? src : undefined,
+      };
+      setDeviceMedias((prev) => [newItem, ...prev]);
+    };
+
     try {
       if (navigator.storage && navigator.storage.persist) {
         await navigator.storage.persist();
@@ -2345,6 +2428,7 @@ export default function App() {
           metadata.height,
           metadata.fps
         );
+        addToLibrary((metadata.durationMs / 1000) || 10);
       } catch (metaErr) {
         console.warn("Unified metadata load failed, using DOM fallback:", metaErr);
         setPillPopup(null);
@@ -2363,6 +2447,7 @@ export default function App() {
               video.videoHeight,
               30
             );
+            addToLibrary(video.duration || 10);
           };
           video.src = src;
         } else {
@@ -2380,12 +2465,14 @@ export default function App() {
               undefined,
               30
             );
+            addToLibrary(audio.duration || 10);
           };
           audio.src = src;
         }
       }
     } else {
       addMediaClip(id, type, src, 5, startAtTime, fileId);
+      addToLibrary(5);
     }
   };
 
@@ -4268,269 +4355,263 @@ const renderHome = () => {
 
 const renderEditor = () => (
   <div className="flex flex-col h-screen w-full bg-[#0c0c0e] overflow-hidden">
-      {/* Premium Integrated Export Overlay */}
+      {/* Exporting Overlay */}
       <AnimatePresence>
-        {(isExporting || exportedVideoUrl) && (
+        {isExporting && (
           <motion.div
-            id="premium-export-screen"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed inset-0 bg-[#050505] z-[500] flex flex-col items-center justify-between p-6 sm:p-12 overflow-y-auto selection:bg-white/10 selection:text-white"
-            style={{
-              background: "radial-gradient(circle at center, rgba(129, 140, 248, 0.05) 0%, rgba(5, 5, 5, 1) 80%)",
-            }}
+            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex flex-col items-center justify-center p-4 sm:p-8"
           >
-            {/* Defs block for SVG Gradient */}
-            <svg className="absolute w-0 h-0 pointer-events-none" aria-hidden="true">
-              <defs>
-                <linearGradient id="traceLinearGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
-                  <stop offset="60%" stopColor="#818cf8" stopOpacity="0.8" />
-                  <stop offset="100%" stopColor="#c084fc" stopOpacity="0.9" />
-                </linearGradient>
-              </defs>
-            </svg>
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              transition={{ type: "spring", damping: 25, stiffness: 180 }}
+              className="w-full max-w-lg bg-[#0e0e11] border border-white/10 rounded-[32px] p-8 shadow-[0_24px_80px_rgba(0,0,0,0.9)] relative overflow-hidden"
+            >
+              {/* Premium Glow effect background */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-80 h-32 bg-purple-500/10 blur-[60px] pointer-events-none rounded-full" />
+              
+              <div className="flex flex-col items-center text-center relative z-10">
+                {/* Visual Ring Spinner */}
+                <div className="relative w-24 h-24 mb-6 flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full border-4 border-white/[0.03]" />
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
+                    className="absolute inset-0 rounded-full border-4 border-l-purple-500 border-t-indigo-500 border-r-transparent border-b-transparent shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+                  />
+                  <Sparkles size={24} className="text-purple-400 animate-pulse" />
+                </div>
 
-            {/* Top Space (Large Negative Space) */}
-            <div className="w-full flex flex-col items-center justify-center min-h-[80px] sm:min-h-[120px] relative">
-              {/* Centered Title */}
-              <div className="text-center">
-                <span className="font-light text-xs tracking-[0.45em] text-zinc-450 uppercase select-none font-sans block">
-                  Export
-                </span>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold mb-1">
+                  Master Render Engine
+                </div>
+                <h3 className="text-xl font-medium text-white mb-2 tracking-tight">
+                  Encoding Premium Asset
+                </h3>
                 
-                {/* Small Export Percentage / Progress Indicator below */}
-                <div className="relative h-10 mt-3 flex items-center justify-center">
-                  <AnimatePresence mode="wait">
-                    {isExporting ? (
-                      <motion.div
-                        key="progress-pct"
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        transition={{ duration: 0.4 }}
-                        className="font-light text-2xl text-zinc-100 font-sans tracking-wide"
-                      >
-                        {Math.round(exportProgress)}%
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="complete-txt"
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        transition={{ duration: 0.5, delay: 0.1 }}
-                        className="flex flex-col items-center"
-                      >
-                        <span className="text-emerald-400 text-[10px] font-mono tracking-widest uppercase font-semibold flex items-center gap-1.5 bg-emerald-500/5 px-3 py-1 rounded-full border border-emerald-500/10 shadow-[0_4px_12px_rgba(16,185,129,0.05)]">
-                          <Check size={11} strokeWidth={3} />
-                          Rendering Complete
-                        </span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                {/* Phase Indicator based on progress */}
+                <p className="text-zinc-500 text-xs mb-8 min-h-[16px] font-medium max-w-[85%]">
+                  {exportProgress < 25 && "Assembling timeline tracks & synchronizing media frames..."}
+                  {exportProgress >= 25 && exportProgress < 50 && "Blending complex crossfades & mixing sound levels..."}
+                  {exportProgress >= 50 && exportProgress < 75 && "Applying deep color grades & lighting filters..."}
+                  {exportProgress >= 75 && exportProgress < 95 && "Compiling spatial video structures & final layers..."}
+                  {exportProgress >= 95 && "Finalizing high-definition codec & writing video file..."}
+                </p>
+
+                {/* Main Progress Indicator */}
+                <div className="w-full bg-[#18181c] rounded-full h-2.5 p-[2px] border border-white/5 mb-4">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 rounded-full shadow-[0_0_10px_rgba(99,102,241,0.4)]"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${exportProgress}%` }}
+                    transition={{ ease: "easeOut" }}
+                  />
+                </div>
+
+                <div className="flex justify-between w-full text-zinc-400 text-[11px] font-mono mb-6 px-1">
+                  <span>Render Status: ACTIVE</span>
+                  <span className="text-indigo-400 font-bold">{exportProgress}%</span>
+                </div>
+
+                {/* Specs breakdown card overlay */}
+                <div className="grid grid-cols-3 gap-2 w-full mt-2 bg-white/[0.02] border border-white/5 rounded-2xl p-3 text-left">
+                  <div>
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Resolution</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">{exportResolution} Ultra</div>
+                  </div>
+                  <div className="border-l border-white/5 pl-3">
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Accelerated</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">GPU Hybrid</div>
+                  </div>
+                  <div className="border-l border-white/5 pl-3">
+                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Format</div>
+                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">
+                      {Capacitor.isNativePlatform() ? "MP4 / H264" : "WebM / Lossless"}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            {/* Center: Large Video Preview Container */}
-            <div className="w-full flex-1 flex flex-col items-center justify-center my-6 max-h-[60vh]">
-              {/* Aspect-aware video preview container, styled with Orca Studio / HIG aesthetic */}
-              <div
-                className={`relative rounded-[28px] border border-white/[0.04] flex items-center justify-center overflow-hidden transition-all duration-700 bg-transparent ${
-                  currentProjectRatio === "9:16"
-                    ? "aspect-[9/16] h-[48vh] sm:h-[55vh] max-h-[520px]"
-                    : currentProjectRatio === "16:9"
-                    ? "aspect-[16/9] w-[75vw] sm:w-[50vw] max-w-[580px]"
-                    : "aspect-square h-[42vh] sm:h-[48vh] max-h-[440px]"
-                }`}
-                style={{
-                  borderRadius: "28px",
-                }}
-              >
-                {/* SVG Border Progress Indicator Trace */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none z-30" style={{ overflow: "visible" }}>
-                  {/* Subtle baseline border */}
-                  <rect
-                    x="0"
-                    y="0"
-                    width="100%"
-                    height="100%"
-                    rx="28"
-                    ry="28"
-                    fill="none"
-                    stroke="rgba(255, 255, 255, 0.04)"
-                    strokeWidth="1.5"
-                  />
-                  {/* Glowing active tracing path */}
-                  <motion.rect
-                    x="0"
-                    y="0"
-                    width="100%"
-                    height="100%"
-                    rx="28"
-                    ry="28"
-                    fill="none"
-                    stroke="url(#traceLinearGradient)"
-                    strokeWidth="1.5"
-                    pathLength="100"
-                    initial={{ strokeDashoffset: 100 }}
-                    animate={{ strokeDashoffset: 100 - (isExporting ? exportProgress : 100) }}
-                    transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
-                    style={{
-                      transform: "rotate(-90deg)",
-                      transformOrigin: "center",
-                      strokeDasharray: "100 100",
-                    }}
-                  />
-                </svg>
+      {/* Export Complete Overlay */}
+      <AnimatePresence>
+        {exportedVideoUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex items-center justify-center p-4 sm:p-8 overflow-y-auto"
+          >
+            <motion.div
+              initial={{ scale: 0.93, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.93, y: 30 }}
+              transition={{ type: "spring", damping: 28, stiffness: 150 }}
+              className="w-full max-w-4xl bg-[#0c0c0e]/95 border border-white/10 rounded-[36px] overflow-hidden shadow-[0_24px_100px_rgba(0,0,0,0.95)] flex flex-col md:flex-row p-6 gap-6 my-auto"
+            >
+              {/* Left video preview panel */}
+              <div className="flex-1 flex flex-col justify-center bg-black/60 rounded-3xl overflow-hidden border border-white/5 relative aspect-video md:aspect-auto md:min-h-[380px] group shadow-inner">
+                <video
+                  src={exportedVideoUrl || undefined}
+                  controls
+                  autoPlay
+                  className="w-full h-full object-contain relative z-10"
+                />
+                
+                {/* Cyberpunk corner details for premium theme */}
+                <div className="absolute top-4 left-4 z-20 pointer-events-none flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[9px] font-mono tracking-wider text-purple-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                  PREVIEW STAGE
+                </div>
+              </div>
 
-                {/* Inside elements */}
-                <AnimatePresence mode="wait">
-                  {isExporting ? (
-                    /* Export in progress screen */
-                    <motion.div
-                      key="export-processing"
-                      initial={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-black/20"
-                    >
-                      <motion.div
-                        animate={{ opacity: [0.35, 0.6, 0.35] }}
-                        transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut" }}
-                        className="flex flex-col items-center gap-4 text-center select-none"
+              {/* Right content controls & download info panel */}
+              <div className="w-full md:w-[360px] flex flex-col justify-between pt-2">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-[10px] sm:text-[11px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white px-3 py-1 rounded-full font-bold tracking-widest uppercase shadow-md">
+                      Mastered
+                    </span>
+                    <span className="text-zinc-500 text-[11px] font-semibold font-mono">
+                      v2.4 Render Build
+                    </span>
+                  </div>
+
+                  <h2 className="text-white font-medium text-2xl tracking-tight mb-4">
+                    Compilation Succeeded
+                  </h2>
+
+                  {/* Metal specs grid */}
+                  <div className="space-y-3 mb-6">
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Export Destination</span>
+                      <span className="text-zinc-300 text-xs font-mono font-semibold">
+                        {Capacitor.isNativePlatform() ? "Device Photos Gallery" : "Browser Downloads"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Render Codec</span>
+                      <span className="text-zinc-300 text-xs font-mono font-semibold">
+                        {Capacitor.isNativePlatform() ? "MP4 (H.264 High)" : "VP9 (High Quality)"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Frame Resolution</span>
+                      <span className="text-emerald-400 text-xs font-mono font-bold">
+                        {exportResolution} Ultra (Mastered)
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
+                      <span className="text-zinc-500 text-xs font-medium">Render Profile</span>
+                      <span className="text-purple-300 text-xs font-semibold">
+                        Lossless Standard Mix
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Toast/Tips container */}
+                  <div className="bg-white/[0.01] border border-white/[0.04] p-3.5 rounded-2xl flex gap-2.5 mb-6 text-zinc-400 text-[11px] sm:text-xs leading-relaxed">
+                    <Sparkles size={16} className="text-purple-400 shrink-0 mt-0.5" />
+                    <div>
+                      Your high-resolution video file is fully authored and ready to be downloaded or persisted in your gallery.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  {Capacitor.isNativePlatform() ? (
+                    <>
+                      <button
+                        onClick={saveVideoToGallery}
+                        disabled={isSavingToGallery}
+                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer disabled:opacity-50"
                       >
-                        <Sparkles size={24} className="text-zinc-650 stroke-[1.25]" />
-                        <div className="flex flex-col gap-1 inline-block">
-                          <span className="text-[9px] tracking-[0.25em] font-mono text-zinc-500 uppercase">
-                            Processing Frames
-                          </span>
-                          <span className="text-[10px] text-zinc-650 font-light max-w-[190px] leading-relaxed font-sans mt-0.5">
-                            {exportProgress < 25 && "Assembling timeline tracks & synced frames"}
-                            {exportProgress >= 25 && exportProgress < 50 && "Blending crossfades & mixing sound levels"}
-                            {exportProgress >= 50 && exportProgress < 75 && "Applying premium color grades & filters"}
-                            {exportProgress >= 75 && exportProgress < 95 && "Compiling formats & layers"}
-                            {exportProgress >= 95 && "Writing high-definition video master file"}
-                          </span>
-                        </div>
-                      </motion.div>
-                    </motion.div>
-                  ) : (
-                    /* Export Finished - Primary Video rendering stage */
-                    <motion.div
-                      key="export-finished"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                      className="absolute inset-0 w-full h-full bg-black/20 flex items-center justify-center"
-                    >
-                      {/* Dynamic Ambient Edge Glow backdrop */}
-                      <div className="absolute inset-0 z-0 pointer-events-none filter blur-[64px] opacity-25 saturate-[1.3] scale-[1.08] transition-opacity duration-1000 select-none">
-                        <video
-                          ref={glowVideoRef}
-                          src={exportedVideoUrl || undefined}
-                          loop
-                          muted
-                          playsInline
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
+                        <Download size={16} className={isSavingToGallery ? "animate-bounce" : ""} />
+                        {isSavingToGallery ? "Writing Album Assets..." : "Save directly to Photos Gallery"}
+                      </button>
 
-                      {/* Actual Video Tag */}
-                      <video
-                        ref={videoRef}
-                        src={exportedVideoUrl || undefined}
-                        loop
-                        playsInline
-                        onClick={handlePlayPause}
-                        onTimeUpdate={handleTimeUpdate}
-                        className="w-full h-full object-contain relative z-10 cursor-pointer"
-                      />
-
-                      {/* Premium elegant glassmorphic Play Button overlay */}
-                      <AnimatePresence>
-                        {!isExportVideoPlaying && (
-                          <motion.button
-                            onClick={handlePlayPause}
-                            initial={{ opacity: 0, scale: 0.85 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.85 }}
-                            whileHover={{ scale: 1.05 }}
-                            whileActive={{ scale: 0.95 }}
-                            transition={{ duration: 0.3, ease: "easeOut" }}
-                            className="absolute z-20 w-16 h-16 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-3xl hover:bg-white/[0.12] transition-colors"
-                          >
-                            <Play size={18} className="fill-white translate-x-0.5 text-white" />
-                          </motion.button>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-
-            {/* Below Preview Section: Glass spec pill + Save buttons */}
-            <div className="w-full flex flex-col items-center gap-7 mt-2 pb-6 sm:pb-12 max-w-sm relative z-20">
-              {/* Single elegant glass pill */}
-              <div className="bg-white/[0.02] backdrop-blur-md border border-white/10 rounded-full px-5 py-2.5 flex items-center justify-center shadow-lg pointer-events-none">
-                <span className="font-mono text-[9px] tracking-[0.25em] font-medium text-zinc-350 uppercase select-none">
-                  MP4 <span className="text-zinc-650 mx-1.5">•</span> H.264 <span className="text-zinc-650 mx-1.5">•</span> 1080P <span className="text-zinc-650 mx-1.5">•</span> 20 Mbps <span className="text-zinc-650 mx-1.5">•</span> 60 FPS
-                </span>
-              </div>
-
-              {/* Save / Close Action triggers */}
-              <div className="w-full min-h-[100px] flex flex-col items-center justify-center">
-                <AnimatePresence>
-                  {!isExporting && exportedVideoUrl && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 15 }}
-                      transition={{ duration: 0.8, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
-                      className="w-full flex flex-col gap-3.5 items-center"
-                    >
-                      {Capacitor.isNativePlatform() ? (
+                      {navigator.share && (
                         <button
-                          onClick={saveVideoToGallery}
-                          disabled={isSavingToGallery}
-                          className="w-full bg-[#fcfcfc] hover:bg-white text-black active:scale-98 transition-all py-3.5 px-6 rounded-full font-semibold text-[11px] tracking-[0.16em] uppercase cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 border border-white/10 shadow-[0_8px_32px_rgba(255,255,255,0.06)] font-sans"
-                        >
-                          {isSavingToGallery ? "Writing Album Assets..." : "Save directly to Photos Gallery"}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            const bestType = getBestSupportedVideoType();
-                            const a = document.createElement("a");
-                            a.href = exportedVideoUrl;
-                            a.download = `project-${exportResolution}-${Date.now()}.${bestType.ext}`;
-                            a.click();
-                            showToast("Video downloaded.");
+                          onClick={async () => {
+                            try {
+                              if (!exportedVideoBlob) return;
+                              const bestType = getBestSupportedVideoType();
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
+                              await navigator.share({
+                                files: [file],
+                                title: 'My Video Project',
+                              });
+                            } catch (err) {
+                              console.warn("Share failed", err);
+                            }
                           }}
-                          className="w-full bg-[#fdfdfd] hover:bg-white text-black active:scale-[0.98] transition-all py-3.5 px-6 rounded-full font-semibold text-[11px] tracking-[0.2em] uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-[0_8px_32px_rgba(255,255,255,0.05)] font-sans"
+                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/5 py-3 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
                         >
-                          <Download size={13} strokeWidth={2.2} />
-                          <span>Save To Gallery</span>
+                          <Share size={16} />
+                          Share Mastered Video File
                         </button>
                       )}
-
+                    </>
+                  ) : (
+                    <>
                       <button
                         onClick={() => {
-                          setExportedVideoUrl(null);
-                          setIsExportVideoPlaying(false);
+                          const bestType = getBestSupportedVideoType();
+                          const a = document.createElement("a");
+                          a.href = exportedVideoUrl;
+                          a.download = `project-${exportResolution}-${Date.now()}.${bestType.ext}`;
+                          a.click();
+                          showToast("Video downloaded.");
                         }}
-                        className="px-6 py-2 text-zinc-500 hover:text-zinc-300 transition-colors text-xs font-medium tracking-wide cursor-pointer font-sans"
+                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer"
                       >
-                        Return to Studio
+                        <Download size={16} />
+                        Download Mastered Output
                       </button>
-                    </motion.div>
+
+                      {navigator.share && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              if (!exportedVideoBlob) return;
+                              const bestType = getBestSupportedVideoType();
+                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
+                              await navigator.share({
+                                files: [file],
+                                title: 'My Video Project',
+                              });
+                            } catch (err) {
+                              console.warn("Share failed", err);
+                            }
+                          }}
+                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/15 py-3 rounded-2xl font-bold text-white text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                        >
+                          <Share size={16} />
+                          Share Rendered Clip
+                        </button>
+                      )}
+                    </>
                   )}
-                </AnimatePresence>
+
+                  <button
+                    onClick={() => {
+                      setExportedVideoUrl(null);
+                      URL.revokeObjectURL(exportedVideoUrl);
+                    }}
+                    className="w-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/5 py-3 rounded-2xl font-medium text-xs text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                  >
+                    Close & Return to Studio
+                  </button>
+                </div>
               </div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -5280,6 +5361,23 @@ const renderEditor = () => (
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col min-h-0 overflow-hidden text-left relative">
+                    {Capacitor.isNativePlatform() && (
+                      <div className="bg-[#181822]/80 border border-indigo-500/10 rounded-2xl p-3.5 mb-4 shrink-0 flex items-center justify-between gap-3 shadow-md font-sans">
+                        <div className="flex items-center gap-3 col-span-1">
+                          <span className="text-xl">📁</span>
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-bold text-zinc-200">Storage Explorer</span>
+                            <span className="text-[8px] text-zinc-400">Select files (images, videos, music) from native storage</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="px-3 py-1.5 bg-indigo-650 hover:bg-indigo-600 active:scale-95 text-white text-[9px] font-extrabold uppercase tracking-wider rounded-lg transition-all cursor-pointer shrink-0"
+                        >
+                          Browse Files
+                        </button>
+                      </div>
+                    )}
                     {currentMediaFolder && (
                       <div className="flex items-center justify-between mb-3 shrink-0">
                         <button

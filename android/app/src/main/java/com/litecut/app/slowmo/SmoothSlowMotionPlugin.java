@@ -650,6 +650,15 @@ public class SmoothSlowMotionPlugin extends Plugin {
                 result.put("outputPath", outputPath);
             }
 
+            if (encoderCore != null) {
+                result.put("encoderSubmittedCount", encoderCore.getSubmittedCount());
+                result.put("encoderQueuedCount", encoderCore.getQueuedCount());
+                result.put("encoderWrittenCount", encoderCore.getWrittenCount());
+                Log.i(TAG, "Pipeline stats - Input: " + frameCount + ", Interpolated: " + interpolatedFramesCount + 
+                           ", Submitted: " + encoderCore.getSubmittedCount() + ", Queued: " + encoderCore.getQueuedCount() + 
+                           ", Written to MP4: " + encoderCore.getWrittenCount());
+            }
+
             JSArray tsArray = new JSArray();
             int sampleStep = Math.max(1, timestamps.size() / 20);
             for (int i = 0; i < timestamps.size(); i += sampleStep) {
@@ -781,6 +790,11 @@ public class SmoothSlowMotionPlugin extends Plugin {
         private int mHeight;
         private int mFps;
 
+        // Custom logging counters for pipeline auditing
+        private int mSubmittedCount = 0;
+        private int mQueuedCount = 0;
+        private int mWrittenCount = 0;
+
         public VideoEncoderCore(String outputPath, int width, int height, int fps) throws Exception {
             mWidth = width;
             mHeight = height;
@@ -800,104 +814,143 @@ public class SmoothSlowMotionPlugin extends Plugin {
             mMuxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
         }
 
+        public int getSubmittedCount() {
+            return mSubmittedCount;
+        }
+
+        public int getQueuedCount() {
+            return mQueuedCount;
+        }
+
+        public int getWrittenCount() {
+            return mWrittenCount;
+        }
+
         public void encodeFrame(Mat bgrMat, long ptsUs) throws Exception {
-            int inputBufferIndex = mEncoder.dequeueInputBuffer(10000); // 10ms timeout
-            if (inputBufferIndex >= 0) {
-                Image image = mEncoder.getInputImage(inputBufferIndex);
-                if (image != null) {
-                    Image.Plane[] planes = image.getPlanes();
-                    ByteBuffer yBuffer = planes[0].getBuffer();
-                    ByteBuffer uBuffer = planes[1].getBuffer();
-                    ByteBuffer vBuffer = planes[2].getBuffer();
+            mSubmittedCount++;
+            int inputBufferIndex = -1;
+            int dequeueAttempt = 0;
 
-                    int yRowStride = planes[0].getRowStride();
-                    int uRowStride = planes[1].getRowStride();
-                    int vRowStride = planes[2].getRowStride();
-                    int uPixelStride = planes[1].getPixelStride();
-                    int vPixelStride = planes[2].getPixelStride();
-
-                    int width = mWidth;
-                    int height = mHeight;
-
-                    // Convert BGR Mat to YUV CV_8UC3 using OpenCV
-                    Mat yuvMat = new Mat();
-                    Imgproc.cvtColor(bgrMat, yuvMat, Imgproc.COLOR_BGR2YUV);
-
-                    // Split YUV into individual channels
-                    List<Mat> yuvChannels = new ArrayList<>();
-                    Core.split(yuvMat, yuvChannels);
-                    Mat yMat = yuvChannels.get(0);
-                    Mat uMatFull = yuvChannels.get(1);
-                    Mat vMatFull = yuvChannels.get(2);
-
-                    // Resize U & V to match downsampled chrominance sizes (W/2 x H/2)
-                    Mat uMat = new Mat();
-                    Mat vMat = new Mat();
-                    Imgproc.resize(uMatFull, uMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
-                    Imgproc.resize(vMatFull, vMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
-
-                    // Copy Y plane
-                    byte[] yRowBuf = new byte[width];
-                    for (int r = 0; r < height; r++) {
-                        yMat.get(r, 0, yRowBuf);
-                        yBuffer.position(r * yRowStride);
-                        yBuffer.put(yRowBuf);
+            // Wait/retry loop explicitly draining the encoder when busy, preventing silent frame drops.
+            while (inputBufferIndex < 0) {
+                inputBufferIndex = mEncoder.dequeueInputBuffer(10000); // 10ms timeout
+                if (inputBufferIndex < 0) {
+                    dequeueAttempt++;
+                    if (dequeueAttempt % 20 == 0) {
+                        Log.w("VideoEncoderCore", "Waiting for input buffer available... Attempts: " + dequeueAttempt + ", ptsUs: " + ptsUs);
                     }
-
-                    // Copy U plane
-                    int uvWidth = width / 2;
-                    int uvHeight = height / 2;
-                    byte[] uRowBuf = new byte[uvWidth];
-                    for (int r = 0; r < uvHeight; r++) {
-                        uMat.get(r, 0, uRowBuf);
-                        uBuffer.position(r * uRowStride);
-                        if (uPixelStride == 1) {
-                            uBuffer.put(uRowBuf);
-                        } else {
-                            int rowStart = r * uRowStride;
-                            for (int c = 0; c < uvWidth; c++) {
-                                uBuffer.put(rowStart + c * uPixelStride, uRowBuf[c]);
-                            }
-                        }
-                    }
-
-                    // Copy V plane
-                    byte[] vRowBuf = new byte[uvWidth];
-                    for (int r = 0; r < uvHeight; r++) {
-                        vMat.get(r, 0, vRowBuf);
-                        vBuffer.position(r * vRowStride);
-                        if (vPixelStride == 1) {
-                            vBuffer.put(vRowBuf);
-                        } else {
-                            int rowStart = r * vRowStride;
-                            for (int c = 0; c < uvWidth; c++) {
-                                vBuffer.put(rowStart + c * vPixelStride, vRowBuf[c]);
-                            }
-                        }
-                    }
-
-                    // Clean up OpenCV mats to prevent native memory leaks
-                    yuvMat.release();
-                    yMat.release();
-                    uMatFull.release();
-                    vMatFull.release();
-                    uMat.release();
-                    vMat.release();
-
-                    image.close();
+                    // Drive encoder output drain to free up input resources!
+                    drainEncoder(false);
                 }
-                mEncoder.queueInputBuffer(inputBufferIndex, 0, mWidth * mHeight * 3 / 2, ptsUs, 0);
             }
+
+            // Once buffer is dequeued, convert and submit the frame
+            Image image = mEncoder.getInputImage(inputBufferIndex);
+            if (image != null) {
+                Image.Plane[] planes = image.getPlanes();
+                ByteBuffer yBuffer = planes[0].getBuffer();
+                ByteBuffer uBuffer = planes[1].getBuffer();
+                ByteBuffer vBuffer = planes[2].getBuffer();
+
+                int yRowStride = planes[0].getRowStride();
+                int uRowStride = planes[1].getRowStride();
+                int vRowStride = planes[2].getRowStride();
+                int uPixelStride = planes[1].getPixelStride();
+                int vPixelStride = planes[2].getPixelStride();
+
+                int width = mWidth;
+                int height = mHeight;
+
+                // Convert BGR Mat to YUV CV_8UC3 using OpenCV
+                Mat yuvMat = new Mat();
+                Imgproc.cvtColor(bgrMat, yuvMat, Imgproc.COLOR_BGR2YUV);
+
+                // Split YUV into individual channels
+                List<Mat> yuvChannels = new ArrayList<>();
+                Core.split(yuvMat, yuvChannels);
+                Mat yMat = yuvChannels.get(0);
+                Mat uMatFull = yuvChannels.get(1);
+                Mat vMatFull = yuvChannels.get(2);
+
+                // Resize U & V to match downsampled chrominance sizes (W/2 x H/2)
+                Mat uMat = new Mat();
+                Mat vMat = new Mat();
+                Imgproc.resize(uMatFull, uMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
+                Imgproc.resize(vMatFull, vMat, new org.opencv.core.Size(width / 2, height / 2), 0, 0, Imgproc.INTER_AREA);
+
+                // Copy Y plane
+                byte[] yRowBuf = new byte[width];
+                for (int r = 0; r < height; r++) {
+                    yMat.get(r, 0, yRowBuf);
+                    yBuffer.position(r * yRowStride);
+                    yBuffer.put(yRowBuf);
+                }
+
+                // Copy U plane
+                int uvWidth = width / 2;
+                int uvHeight = height / 2;
+                byte[] uRowBuf = new byte[uvWidth];
+                for (int r = 0; r < uvHeight; r++) {
+                    uMat.get(r, 0, uRowBuf);
+                    uBuffer.position(r * uRowStride);
+                    if (uPixelStride == 1) {
+                        uBuffer.put(uRowBuf);
+                    } else {
+                        int rowStart = r * uRowStride;
+                        for (int c = 0; c < uvWidth; c++) {
+                            uBuffer.put(rowStart + c * uPixelStride, uRowBuf[c]);
+                        }
+                    }
+                }
+
+                // Copy V plane
+                byte[] vRowBuf = new byte[uvWidth];
+                for (int r = 0; r < uvHeight; r++) {
+                    vMat.get(r, 0, vRowBuf);
+                    vBuffer.position(r * vRowStride);
+                    if (vPixelStride == 1) {
+                        vBuffer.put(vRowBuf);
+                    } else {
+                        int rowStart = r * vRowStride;
+                        for (int c = 0; c < uvWidth; c++) {
+                            vBuffer.put(rowStart + c * vPixelStride, vRowBuf[c]);
+                        }
+                    }
+                }
+
+                // Clean up OpenCV mats to prevent native memory leaks
+                yuvMat.release();
+                yMat.release();
+                uMatFull.release();
+                vMatFull.release();
+                uMat.release();
+                vMat.release();
+
+                image.close();
+            }
+            mEncoder.queueInputBuffer(inputBufferIndex, 0, mWidth * mHeight * 3 / 2, ptsUs, 0);
+            mQueuedCount++;
 
             drainEncoder(false);
         }
 
         public void signalEndOfStream() throws Exception {
-            int inputBufferIndex = mEncoder.dequeueInputBuffer(10000);
-            if (inputBufferIndex >= 0) {
-                mEncoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            int inputBufferIndex = -1;
+            while (inputBufferIndex < 0) {
+                inputBufferIndex = mEncoder.dequeueInputBuffer(10000);
+                if (inputBufferIndex < 0) {
+                    drainEncoder(false);
+                }
             }
+            mEncoder.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
             drainEncoder(true);
+
+            // Log detailed pipeline audit metrics
+            Log.i("VideoEncoderCore", "=== PIPELINE AUDIT COMPLETED ===");
+            Log.i("VideoEncoderCore", "Total Frames Submitted: " + mSubmittedCount);
+            Log.i("VideoEncoderCore", "Total Frames Successfully Queued: " + mQueuedCount);
+            Log.i("VideoEncoderCore", "Total Frames Written to MP4: " + mWrittenCount);
+            Log.i("VideoEncoderCore", "===============================");
         }
 
         private void drainEncoder(boolean endOfStream) throws Exception {
@@ -935,6 +988,7 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         encodedData.position(mBufferInfo.offset);
                         encodedData.limit(mBufferInfo.offset + mBufferInfo.size);
                         mMuxer.writeSampleData(mTrackIndex, encodedData, mBufferInfo);
+                        mWrittenCount++;
                     }
 
                     mEncoder.releaseOutputBuffer(encoderStatus, false);

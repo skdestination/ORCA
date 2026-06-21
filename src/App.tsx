@@ -904,6 +904,62 @@ export default function App() {
     }
   }, [activeExpandedMenu]);
 
+  const [deviceMedias, setDeviceMedias] = useState<any[]>([]);
+  const [isMediaLoading, setIsMediaLoading] = useState<boolean>(false);
+
+  const fetchRealDeviceMedia = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      setIsMediaPermissionGranted(true);
+      return;
+    }
+    setIsMediaLoading(true);
+    try {
+      const mediaAny = Media as any;
+      if (typeof mediaAny.checkPermissions === "function") {
+        const check = await mediaAny.checkPermissions();
+        if (check.publicStorage !== "granted" && check.publicStorage13Plus !== "granted") {
+          const req = await mediaAny.requestPermissions();
+          if (req.publicStorage !== "granted" && req.publicStorage13Plus !== "granted") {
+            showToast("Gallery storage permission denied.");
+            setIsMediaLoading(false);
+            return;
+          }
+        }
+      }
+      setIsMediaPermissionGranted(true);
+
+      const result = await Media.getMedias();
+      if (result && result.medias) {
+        const mapped = result.medias.map((item: any) => {
+          const convertedUrl = Capacitor.convertFileSrc(item.path || item.identifier);
+          return {
+            name: item.name || "Media File",
+            path: item.path || item.identifier,
+            url: convertedUrl,
+            type: item.type || "video",
+            folder: item.folder || "Camera Roll",
+            duration: item.duration || 10,
+            thumbnail: item.type === "video" ? undefined : convertedUrl,
+          };
+        });
+
+        const cleanList = mapped.filter((item: any) => item.path);
+        setDeviceMedias(cleanList);
+      }
+    } catch (err) {
+      console.error("Local storage scanner failed:", err);
+      showToast("Access native storage failed.");
+    } finally {
+      setIsMediaLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeExpandedMenu === "plus-media" && Capacitor.isNativePlatform()) {
+      fetchRealDeviceMedia();
+    }
+  }, [activeExpandedMenu]);
+
   const [activeTransformTab, setActiveTransformTab] = useState<"position" | "scale" | "rotate">("position");
   const [maskAdjustOpen, setMaskAdjustOpen] = useState(false);
   const [showFloatingMaskAdjust, setShowFloatingMaskAdjust] = useState(false);
@@ -1461,6 +1517,35 @@ export default function App() {
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
   const [exportedVideoBlob, setExportedVideoBlob] = useState<Blob | null>(null);
   const [isSavingToGallery, setIsSavingToGallery] = useState(false);
+
+  const [isExportVideoPlaying, setIsExportVideoPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const glowVideoRef = useRef<HTMLVideoElement>(null);
+
+  const handlePlayPause = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play().catch(() => {});
+      if (glowVideoRef.current) {
+        glowVideoRef.current.play().catch(() => {});
+      }
+      setIsExportVideoPlaying(true);
+    } else {
+      videoRef.current.pause();
+      if (glowVideoRef.current) {
+        glowVideoRef.current.pause();
+      }
+      setIsExportVideoPlaying(false);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current && glowVideoRef.current) {
+      if (Math.abs(videoRef.current.currentTime - glowVideoRef.current.currentTime) > 0.15) {
+        glowVideoRef.current.currentTime = videoRef.current.currentTime;
+      }
+    }
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -3059,6 +3144,10 @@ export default function App() {
     const startY = e.clientY;
     const initialLeftSeconds = clip.leftSeconds;
     
+    // Canvas-relative initialization for absolute, scroll-immune dragging
+    const innerRectInit = document.getElementById("timeline-inner")?.getBoundingClientRect();
+    const initialClickCanvasX = innerRectInit ? (startX - innerRectInit.left) : 0;
+    
     // Map of initial states for ALL selected clips
     const initialClipsData = new Map<string, { left: number, layer: string }>();
     clips.forEach(c => {
@@ -3099,7 +3188,25 @@ export default function App() {
         return;
       }
 
-      const deltaSeconds = deltaX / currentPixelsPerSecondRef.current;
+      // --- AUTO SCROLL WHEN DRAGGING NEAR EDGES ---
+      if (timelineScrollRef.current) {
+        const container = timelineScrollRef.current;
+        const containerRect = container.getBoundingClientRect();
+        const margin = 50; // pixels to trigger auto-scroll
+        if (moveEvent.clientX > containerRect.right - margin) {
+          const speedFactor = (moveEvent.clientX - (containerRect.right - margin)) * 0.15;
+          container.scrollLeft += Math.min(10, speedFactor);
+        } else if (moveEvent.clientX < containerRect.left + margin) {
+          const speedFactor = ((containerRect.left + margin) - moveEvent.clientX) * 0.15;
+          container.scrollLeft -= Math.min(10, speedFactor);
+        }
+      }
+
+      const innerRectCurr = document.getElementById("timeline-inner")?.getBoundingClientRect();
+      const currentClickCanvasX = innerRectCurr ? (moveEvent.clientX - innerRectCurr.left) : (moveEvent.clientX - startX);
+      const deltaSeconds = innerRectInit && innerRectCurr 
+        ? (currentClickCanvasX - initialClickCanvasX) / currentPixelsPerSecondRef.current
+        : deltaX / currentPixelsPerSecondRef.current;
       let newLeftSeconds = initialLeftSeconds + deltaSeconds;
 
       // --- MAGNETIC SNAPPING (Only snap the clip being dragged) ---
@@ -3359,21 +3466,22 @@ export default function App() {
               newLeft = snappedLeft;
             }
 
+            const speed = c.speed || 1.0;
             const change = newLeft - initialLeftSeconds;
-            let newDuration = Math.max(0.5, initialDurationSeconds - change);
-            let newTrimStart = initialTrimStartSeconds + change;
-            
+            let newTrimStart = initialTrimStartSeconds + change * speed;
+            let newDuration = initialDurationSeconds - change;
+            let finalLeft = newLeft;
+
             if (newTrimStart < 0) {
-                const diff = (0 - newTrimStart);
-                newTrimStart = 0;
-                newLeft += diff;
-                newDuration -= diff;
+              newTrimStart = 0;
+              finalLeft = initialLeftSeconds - initialTrimStartSeconds / speed;
+              newDuration = initialDurationSeconds + initialTrimStartSeconds / speed;
             }
 
             if (newDuration < 0.5) return c; // Clamp
             return {
               ...c,
-              leftSeconds: newLeft,
+              leftSeconds: Math.max(0, finalLeft),
               durationSeconds: newDuration,
               trimStartSeconds: newTrimStart,
               opticalFlow: undefined,
@@ -3410,13 +3518,14 @@ export default function App() {
               return { ...c, durationSeconds: newDuration, opticalFlow: undefined };
             }
 
+            const speed = c.speed || 1.0;
             let newDuration = Math.max(
               0.5,
               initialDurationSeconds + deltaSeconds,
             );
             
-            if (newDuration + initialTrimStartSeconds > maxAvailableDuration) {
-                newDuration = maxAvailableDuration - initialTrimStartSeconds;
+            if (initialTrimStartSeconds + newDuration * speed > maxAvailableDuration) {
+                newDuration = (maxAvailableDuration - initialTrimStartSeconds) / speed;
             }
             
             // Snap right edge
@@ -3442,8 +3551,8 @@ export default function App() {
               newDuration = Math.max(0.5, snappedRight - initialLeftSeconds);
             }
 
-            if (newDuration + initialTrimStartSeconds > maxAvailableDuration) {
-                newDuration = maxAvailableDuration - initialTrimStartSeconds;
+            if (initialTrimStartSeconds + newDuration * speed > maxAvailableDuration) {
+                newDuration = (maxAvailableDuration - initialTrimStartSeconds) / speed;
             }
 
             return { ...c, durationSeconds: newDuration, opticalFlow: undefined };
@@ -4159,263 +4268,269 @@ const renderHome = () => {
 
 const renderEditor = () => (
   <div className="flex flex-col h-screen w-full bg-[#0c0c0e] overflow-hidden">
-      {/* Exporting Overlay */}
+      {/* Premium Integrated Export Overlay */}
       <AnimatePresence>
-        {isExporting && (
+        {(isExporting || exportedVideoUrl) && (
           <motion.div
+            id="premium-export-screen"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex flex-col items-center justify-center p-4 sm:p-8"
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed inset-0 bg-[#050505] z-[500] flex flex-col items-center justify-between p-6 sm:p-12 overflow-y-auto selection:bg-white/10 selection:text-white"
+            style={{
+              background: "radial-gradient(circle at center, rgba(129, 140, 248, 0.05) 0%, rgba(5, 5, 5, 1) 80%)",
+            }}
           >
-            <motion.div
-              initial={{ scale: 0.95, y: 15 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 15 }}
-              transition={{ type: "spring", damping: 25, stiffness: 180 }}
-              className="w-full max-w-lg bg-[#0e0e11] border border-white/10 rounded-[32px] p-8 shadow-[0_24px_80px_rgba(0,0,0,0.9)] relative overflow-hidden"
-            >
-              {/* Premium Glow effect background */}
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-80 h-32 bg-purple-500/10 blur-[60px] pointer-events-none rounded-full" />
-              
-              <div className="flex flex-col items-center text-center relative z-10">
-                {/* Visual Ring Spinner */}
-                <div className="relative w-24 h-24 mb-6 flex items-center justify-center">
-                  <div className="absolute inset-0 rounded-full border-4 border-white/[0.03]" />
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
-                    className="absolute inset-0 rounded-full border-4 border-l-purple-500 border-t-indigo-500 border-r-transparent border-b-transparent shadow-[0_0_15px_rgba(99,102,241,0.2)]"
-                  />
-                  <Sparkles size={24} className="text-purple-400 animate-pulse" />
-                </div>
+            {/* Defs block for SVG Gradient */}
+            <svg className="absolute w-0 h-0 pointer-events-none" aria-hidden="true">
+              <defs>
+                <linearGradient id="traceLinearGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                  <stop offset="60%" stopColor="#818cf8" stopOpacity="0.8" />
+                  <stop offset="100%" stopColor="#c084fc" stopOpacity="0.9" />
+                </linearGradient>
+              </defs>
+            </svg>
 
-                <div className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold mb-1">
-                  Master Render Engine
-                </div>
-                <h3 className="text-xl font-medium text-white mb-2 tracking-tight">
-                  Encoding Premium Asset
-                </h3>
+            {/* Top Space (Large Negative Space) */}
+            <div className="w-full flex flex-col items-center justify-center min-h-[80px] sm:min-h-[120px] relative">
+              {/* Centered Title */}
+              <div className="text-center">
+                <span className="font-light text-xs tracking-[0.45em] text-zinc-450 uppercase select-none font-sans block">
+                  Export
+                </span>
                 
-                {/* Phase Indicator based on progress */}
-                <p className="text-zinc-500 text-xs mb-8 min-h-[16px] font-medium max-w-[85%]">
-                  {exportProgress < 25 && "Assembling timeline tracks & synchronizing media frames..."}
-                  {exportProgress >= 25 && exportProgress < 50 && "Blending complex crossfades & mixing sound levels..."}
-                  {exportProgress >= 50 && exportProgress < 75 && "Applying deep color grades & lighting filters..."}
-                  {exportProgress >= 75 && exportProgress < 95 && "Compiling spatial video structures & final layers..."}
-                  {exportProgress >= 95 && "Finalizing high-definition codec & writing video file..."}
-                </p>
-
-                {/* Main Progress Indicator */}
-                <div className="w-full bg-[#18181c] rounded-full h-2.5 p-[2px] border border-white/5 mb-4">
-                  <motion.div
-                    className="h-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 rounded-full shadow-[0_0_10px_rgba(99,102,241,0.4)]"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${exportProgress}%` }}
-                    transition={{ ease: "easeOut" }}
-                  />
-                </div>
-
-                <div className="flex justify-between w-full text-zinc-400 text-[11px] font-mono mb-6 px-1">
-                  <span>Render Status: ACTIVE</span>
-                  <span className="text-indigo-400 font-bold">{exportProgress}%</span>
-                </div>
-
-                {/* Specs breakdown card overlay */}
-                <div className="grid grid-cols-3 gap-2 w-full mt-2 bg-white/[0.02] border border-white/5 rounded-2xl p-3 text-left">
-                  <div>
-                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Resolution</div>
-                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">{exportResolution} Ultra</div>
-                  </div>
-                  <div className="border-l border-white/5 pl-3">
-                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Accelerated</div>
-                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">GPU Hybrid</div>
-                  </div>
-                  <div className="border-l border-white/5 pl-3">
-                    <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Format</div>
-                    <div className="text-xs text-zinc-200 font-semibold mt-0.5">
-                      {Capacitor.isNativePlatform() ? "MP4 / H264" : "WebM / Lossless"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Export Complete Overlay */}
-      <AnimatePresence>
-        {exportedVideoUrl && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/95 sm:bg-black/85 backdrop-blur-2xl z-[500] flex items-center justify-center p-4 sm:p-8 overflow-y-auto"
-          >
-            <motion.div
-              initial={{ scale: 0.93, y: 30 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.93, y: 30 }}
-              transition={{ type: "spring", damping: 28, stiffness: 150 }}
-              className="w-full max-w-4xl bg-[#0c0c0e]/95 border border-white/10 rounded-[36px] overflow-hidden shadow-[0_24px_100px_rgba(0,0,0,0.95)] flex flex-col md:flex-row p-6 gap-6 my-auto"
-            >
-              {/* Left video preview panel */}
-              <div className="flex-1 flex flex-col justify-center bg-black/60 rounded-3xl overflow-hidden border border-white/5 relative aspect-video md:aspect-auto md:min-h-[380px] group shadow-inner">
-                <video
-                  src={exportedVideoUrl || undefined}
-                  controls
-                  autoPlay
-                  className="w-full h-full object-contain relative z-10"
-                />
-                
-                {/* Cyberpunk corner details for premium theme */}
-                <div className="absolute top-4 left-4 z-20 pointer-events-none flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-[9px] font-mono tracking-wider text-purple-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
-                  PREVIEW STAGE
-                </div>
-              </div>
-
-              {/* Right content controls & download info panel */}
-              <div className="w-full md:w-[360px] flex flex-col justify-between pt-2">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[10px] sm:text-[11px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white px-3 py-1 rounded-full font-bold tracking-widest uppercase shadow-md">
-                      Mastered
-                    </span>
-                    <span className="text-zinc-500 text-[11px] font-semibold font-mono">
-                      v2.4 Render Build
-                    </span>
-                  </div>
-
-                  <h2 className="text-white font-medium text-2xl tracking-tight mb-4">
-                    Compilation Succeeded
-                  </h2>
-
-                  {/* Metal specs grid */}
-                  <div className="space-y-3 mb-6">
-                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
-                      <span className="text-zinc-500 text-xs font-medium">Export Destination</span>
-                      <span className="text-zinc-300 text-xs font-mono font-semibold">
-                        {Capacitor.isNativePlatform() ? "Device Photos Gallery" : "Browser Downloads"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
-                      <span className="text-zinc-500 text-xs font-medium">Render Codec</span>
-                      <span className="text-zinc-300 text-xs font-mono font-semibold">
-                        {Capacitor.isNativePlatform() ? "MP4 (H.264 High)" : "VP9 (High Quality)"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
-                      <span className="text-zinc-500 text-xs font-medium">Frame Resolution</span>
-                      <span className="text-emerald-400 text-xs font-mono font-bold">
-                        {exportResolution} Ultra (Mastered)
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
-                      <span className="text-zinc-500 text-xs font-medium">Render Profile</span>
-                      <span className="text-purple-300 text-xs font-semibold">
-                        Lossless Standard Mix
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Toast/Tips container */}
-                  <div className="bg-white/[0.01] border border-white/[0.04] p-3.5 rounded-2xl flex gap-2.5 mb-6 text-zinc-400 text-[11px] sm:text-xs leading-relaxed">
-                    <Sparkles size={16} className="text-purple-400 shrink-0 mt-0.5" />
-                    <div>
-                      Your high-resolution video file is fully authored and ready to be downloaded or persisted in your gallery.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2.5">
-                  {Capacitor.isNativePlatform() ? (
-                    <>
-                      <button
-                        onClick={saveVideoToGallery}
-                        disabled={isSavingToGallery}
-                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer disabled:opacity-50"
+                {/* Small Export Percentage / Progress Indicator below */}
+                <div className="relative h-10 mt-3 flex items-center justify-center">
+                  <AnimatePresence mode="wait">
+                    {isExporting ? (
+                      <motion.div
+                        key="progress-pct"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        transition={{ duration: 0.4 }}
+                        className="font-light text-2xl text-zinc-100 font-sans tracking-wide"
                       >
-                        <Download size={16} className={isSavingToGallery ? "animate-bounce" : ""} />
-                        {isSavingToGallery ? "Writing Album Assets..." : "Save directly to Photos Gallery"}
-                      </button>
+                        {Math.round(exportProgress)}%
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="complete-txt"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        transition={{ duration: 0.5, delay: 0.1 }}
+                        className="flex flex-col items-center"
+                      >
+                        <span className="text-emerald-400 text-[10px] font-mono tracking-widest uppercase font-semibold flex items-center gap-1.5 bg-emerald-500/5 px-3 py-1 rounded-full border border-emerald-500/10 shadow-[0_4px_12px_rgba(16,185,129,0.05)]">
+                          <Check size={11} strokeWidth={3} />
+                          Rendering Complete
+                        </span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
+            </div>
 
-                      {navigator.share && (
+            {/* Center: Large Video Preview Container */}
+            <div className="w-full flex-1 flex flex-col items-center justify-center my-6 max-h-[60vh]">
+              {/* Aspect-aware video preview container, styled with Orca Studio / HIG aesthetic */}
+              <div
+                className={`relative rounded-[28px] border border-white/[0.04] flex items-center justify-center overflow-hidden transition-all duration-700 bg-transparent ${
+                  currentProjectRatio === "9:16"
+                    ? "aspect-[9/16] h-[48vh] sm:h-[55vh] max-h-[520px]"
+                    : currentProjectRatio === "16:9"
+                    ? "aspect-[16/9] w-[75vw] sm:w-[50vw] max-w-[580px]"
+                    : "aspect-square h-[42vh] sm:h-[48vh] max-h-[440px]"
+                }`}
+                style={{
+                  borderRadius: "28px",
+                }}
+              >
+                {/* SVG Border Progress Indicator Trace */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-30" style={{ overflow: "visible" }}>
+                  {/* Subtle baseline border */}
+                  <rect
+                    x="0"
+                    y="0"
+                    width="100%"
+                    height="100%"
+                    rx="28"
+                    ry="28"
+                    fill="none"
+                    stroke="rgba(255, 255, 255, 0.04)"
+                    strokeWidth="1.5"
+                  />
+                  {/* Glowing active tracing path */}
+                  <motion.rect
+                    x="0"
+                    y="0"
+                    width="100%"
+                    height="100%"
+                    rx="28"
+                    ry="28"
+                    fill="none"
+                    stroke="url(#traceLinearGradient)"
+                    strokeWidth="1.5"
+                    pathLength="100"
+                    initial={{ strokeDashoffset: 100 }}
+                    animate={{ strokeDashoffset: 100 - (isExporting ? exportProgress : 100) }}
+                    transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
+                    style={{
+                      transform: "rotate(-90deg)",
+                      transformOrigin: "center",
+                      strokeDasharray: "100 100",
+                    }}
+                  />
+                </svg>
+
+                {/* Inside elements */}
+                <AnimatePresence mode="wait">
+                  {isExporting ? (
+                    /* Export in progress screen */
+                    <motion.div
+                      key="export-processing"
+                      initial={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-black/20"
+                    >
+                      <motion.div
+                        animate={{ opacity: [0.35, 0.6, 0.35] }}
+                        transition={{ repeat: Infinity, duration: 4.5, ease: "easeInOut" }}
+                        className="flex flex-col items-center gap-4 text-center select-none"
+                      >
+                        <Sparkles size={24} className="text-zinc-650 stroke-[1.25]" />
+                        <div className="flex flex-col gap-1 inline-block">
+                          <span className="text-[9px] tracking-[0.25em] font-mono text-zinc-500 uppercase">
+                            Processing Frames
+                          </span>
+                          <span className="text-[10px] text-zinc-650 font-light max-w-[190px] leading-relaxed font-sans mt-0.5">
+                            {exportProgress < 25 && "Assembling timeline tracks & synced frames"}
+                            {exportProgress >= 25 && exportProgress < 50 && "Blending crossfades & mixing sound levels"}
+                            {exportProgress >= 50 && exportProgress < 75 && "Applying premium color grades & filters"}
+                            {exportProgress >= 75 && exportProgress < 95 && "Compiling formats & layers"}
+                            {exportProgress >= 95 && "Writing high-definition video master file"}
+                          </span>
+                        </div>
+                      </motion.div>
+                    </motion.div>
+                  ) : (
+                    /* Export Finished - Primary Video rendering stage */
+                    <motion.div
+                      key="export-finished"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                      className="absolute inset-0 w-full h-full bg-black/20 flex items-center justify-center"
+                    >
+                      {/* Dynamic Ambient Edge Glow backdrop */}
+                      <div className="absolute inset-0 z-0 pointer-events-none filter blur-[64px] opacity-25 saturate-[1.3] scale-[1.08] transition-opacity duration-1000 select-none">
+                        <video
+                          ref={glowVideoRef}
+                          src={exportedVideoUrl || undefined}
+                          loop
+                          muted
+                          playsInline
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      {/* Actual Video Tag */}
+                      <video
+                        ref={videoRef}
+                        src={exportedVideoUrl || undefined}
+                        loop
+                        playsInline
+                        onClick={handlePlayPause}
+                        onTimeUpdate={handleTimeUpdate}
+                        className="w-full h-full object-contain relative z-10 cursor-pointer"
+                      />
+
+                      {/* Premium elegant glassmorphic Play Button overlay */}
+                      <AnimatePresence>
+                        {!isExportVideoPlaying && (
+                          <motion.button
+                            onClick={handlePlayPause}
+                            initial={{ opacity: 0, scale: 0.85 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.85 }}
+                            whileHover={{ scale: 1.05 }}
+                            whileActive={{ scale: 0.95 }}
+                            transition={{ duration: 0.3, ease: "easeOut" }}
+                            className="absolute z-20 w-16 h-16 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/10 flex items-center justify-center text-white cursor-pointer shadow-3xl hover:bg-white/[0.12] transition-colors"
+                          >
+                            <Play size={18} className="fill-white translate-x-0.5 text-white" />
+                          </motion.button>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+
+            {/* Below Preview Section: Glass spec pill + Save buttons */}
+            <div className="w-full flex flex-col items-center gap-7 mt-2 pb-6 sm:pb-12 max-w-sm relative z-20">
+              {/* Single elegant glass pill */}
+              <div className="bg-white/[0.02] backdrop-blur-md border border-white/10 rounded-full px-5 py-2.5 flex items-center justify-center shadow-lg pointer-events-none">
+                <span className="font-mono text-[9px] tracking-[0.25em] font-medium text-zinc-350 uppercase select-none">
+                  MP4 <span className="text-zinc-650 mx-1.5">•</span> H.264 <span className="text-zinc-650 mx-1.5">•</span> 1080P <span className="text-zinc-650 mx-1.5">•</span> 20 Mbps <span className="text-zinc-650 mx-1.5">•</span> 60 FPS
+                </span>
+              </div>
+
+              {/* Save / Close Action triggers */}
+              <div className="w-full min-h-[100px] flex flex-col items-center justify-center">
+                <AnimatePresence>
+                  {!isExporting && exportedVideoUrl && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 15 }}
+                      transition={{ duration: 0.8, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                      className="w-full flex flex-col gap-3.5 items-center"
+                    >
+                      {Capacitor.isNativePlatform() ? (
                         <button
-                          onClick={async () => {
-                            try {
-                              if (!exportedVideoBlob) return;
-                              const bestType = getBestSupportedVideoType();
-                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
-                              await navigator.share({
-                                files: [file],
-                                title: 'My Video Project',
-                              });
-                            } catch (err) {
-                              console.warn("Share failed", err);
-                            }
-                          }}
-                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/5 py-3 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                          onClick={saveVideoToGallery}
+                          disabled={isSavingToGallery}
+                          className="w-full bg-[#fcfcfc] hover:bg-white text-black active:scale-98 transition-all py-3.5 px-6 rounded-full font-semibold text-[11px] tracking-[0.16em] uppercase cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 border border-white/10 shadow-[0_8px_32px_rgba(255,255,255,0.06)] font-sans"
                         >
-                          <Share size={16} />
-                          Share Mastered Video File
+                          {isSavingToGallery ? "Writing Album Assets..." : "Save directly to Photos Gallery"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const bestType = getBestSupportedVideoType();
+                            const a = document.createElement("a");
+                            a.href = exportedVideoUrl;
+                            a.download = `project-${exportResolution}-${Date.now()}.${bestType.ext}`;
+                            a.click();
+                            showToast("Video downloaded.");
+                          }}
+                          className="w-full bg-[#fdfdfd] hover:bg-white text-black active:scale-[0.98] transition-all py-3.5 px-6 rounded-full font-semibold text-[11px] tracking-[0.2em] uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-[0_8px_32px_rgba(255,255,255,0.05)] font-sans"
+                        >
+                          <Download size={13} strokeWidth={2.2} />
+                          <span>Save To Gallery</span>
                         </button>
                       )}
-                    </>
-                  ) : (
-                    <>
+
                       <button
                         onClick={() => {
-                          const bestType = getBestSupportedVideoType();
-                          const a = document.createElement("a");
-                          a.href = exportedVideoUrl;
-                          a.download = `project-${exportResolution}-${Date.now()}.${bestType.ext}`;
-                          a.click();
-                          showToast("Video downloaded.");
+                          setExportedVideoUrl(null);
+                          setIsExportVideoPlaying(false);
                         }}
-                        className="w-full bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 hover:opacity-90 active:scale-98 transition-all py-3.5 px-4 rounded-2xl font-bold text-white text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[0_4px_24px_rgba(99,102,241,0.25)] border border-indigo-500/10 cursor-pointer"
+                        className="px-6 py-2 text-zinc-500 hover:text-zinc-300 transition-colors text-xs font-medium tracking-wide cursor-pointer font-sans"
                       >
-                        <Download size={16} />
-                        Download Mastered Output
+                        Return to Studio
                       </button>
-
-                      {navigator.share && (
-                        <button
-                          onClick={async () => {
-                            try {
-                              if (!exportedVideoBlob) return;
-                              const bestType = getBestSupportedVideoType();
-                              const file = new File([exportedVideoBlob], `project-${Date.now()}.${bestType.ext}`, { type: bestType.mime });
-                              await navigator.share({
-                                files: [file],
-                                title: 'My Video Project',
-                              });
-                            } catch (err) {
-                              console.warn("Share failed", err);
-                            }
-                          }}
-                          className="w-full bg-[#18181c] hover:bg-[#202026] border border-white/15 py-3 rounded-2xl font-bold text-white text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
-                        >
-                          <Share size={16} />
-                          Share Rendered Clip
-                        </button>
-                      )}
-                    </>
+                    </motion.div>
                   )}
-
-                  <button
-                    onClick={() => {
-                      setExportedVideoUrl(null);
-                      URL.revokeObjectURL(exportedVideoUrl);
-                    }}
-                    className="w-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/5 py-3 rounded-2xl font-medium text-xs text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                  >
-                    Close & Return to Studio
-                  </button>
-                </div>
+                </AnimatePresence>
               </div>
-            </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -5145,7 +5260,7 @@ const renderEditor = () => (
                     
                     <div className="flex flex-col gap-2 w-full max-w-[200px]">
                       <button
-                        onClick={() => setIsMediaPermissionGranted(true)}
+                        onClick={fetchRealDeviceMedia}
                         className="w-full bg-indigo-600 hover:bg-indigo-505 text-white font-extrabold text-[11px] py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-650/20 active:scale-95 cursor-pointer uppercase tracking-wider"
                       >
                         Allow Access
@@ -5157,6 +5272,11 @@ const renderEditor = () => (
                         Cancel
                       </button>
                     </div>
+                  </div>
+                ) : isMediaLoading ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                    <span className="w-10 h-10 border-4 border-zinc-800 border-t-indigo-500 rounded-full animate-spin mb-3"></span>
+                    <span className="text-[10px] text-zinc-400 font-bold select-none uppercase tracking-widest">Scanning Local Media...</span>
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col min-h-0 overflow-hidden text-left relative">
@@ -5189,59 +5309,95 @@ const renderEditor = () => (
                       )}
 
                       {selectedMediaTab === "Folders" && !currentMediaFolder ? (
-                        [
-                          { name: "Camera Roll", count: 4, icon: "📁" },
-                          { name: "Downloads", count: 2, icon: "📥" },
-                          { name: "Audio Recordings", count: 2, icon: "🎙️" },
-                          { name: "Screenshots", count: 2, icon: "📸" },
-                        ].map((fold) => (
-                          <div
-                            key={fold.name}
-                            onClick={() => setCurrentMediaFolder(fold.name)}
-                            className="bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-white/[0.1] active:scale-95 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all h-28 shadow-lg group"
-                          >
-                            <span className="text-2xl group-hover:scale-110 transition-all self-start">{fold.icon}</span>
-                            <div className="flex flex-col">
-                              <span className="text-[11px] font-extrabold text-zinc-250 group-hover:text-white truncate">{fold.name}</span>
-                              <span className="text-[8px] text-zinc-500 font-semibold">{fold.count} items</span>
+                        (() => {
+                          const foldersMap: { [key: string]: { count: number; icon: string } } = {};
+                          if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
+                            deviceMedias.forEach(item => {
+                              const folderName = item.folder || "Camera Roll";
+                              if (!foldersMap[folderName]) {
+                                let icon = "📁";
+                                if (folderName.toLowerCase().includes("download")) icon = "📥";
+                                else if (folderName.toLowerCase().includes("camera") || folderName.toLowerCase().includes("dcim")) icon = "📸";
+                                else if (folderName.toLowerCase().includes("record") || folderName.toLowerCase().includes("audio")) icon = "🎙️";
+                                else if (folderName.toLowerCase().includes("screenshot")) icon = "🖼️";
+                                else if (folderName.toLowerCase().includes("telegram") || folderName.toLowerCase().includes("whatsapp")) icon = "💬";
+                                foldersMap[folderName] = { count: 0, icon };
+                              }
+                              foldersMap[folderName].count++;
+                            });
+                          }
+                          const folderList = Object.keys(foldersMap).length > 0 
+                            ? Object.keys(foldersMap).map(name => ({
+                                name,
+                                count: foldersMap[name].count,
+                                icon: foldersMap[name].icon
+                              }))
+                            : [
+                                { name: "Camera Roll", count: 4, icon: "📁" },
+                                { name: "Downloads", count: 2, icon: "📥" },
+                                { name: "Audio Recordings", count: 2, icon: "🎙️" },
+                                { name: "Screenshots", count: 2, icon: "📸" },
+                              ];
+
+                          return folderList.map((fold) => (
+                            <div
+                              key={fold.name}
+                              onClick={() => setCurrentMediaFolder(fold.name)}
+                              className="bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-white/[0.1] active:scale-95 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all h-28 shadow-lg group"
+                            >
+                              <span className="text-2xl group-hover:scale-110 transition-all self-start">{fold.icon}</span>
+                              <div className="flex flex-col">
+                                <span className="text-[11px] font-extrabold text-zinc-250 group-hover:text-white truncate">{fold.name}</span>
+                                <span className="text-[8px] text-zinc-500 font-semibold">{fold.count} items</span>
+                              </div>
                             </div>
-                          </div>
-                        ))
+                          ));
+                        })()
                       ) : (
                         (() => {
                           let displayItems: any[] = [];
                           
                           if (currentMediaFolder) {
-                            if (currentMediaFolder === "Camera Roll") {
-                              displayItems = [
-                                { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400", type: "video" },
-                                { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400", type: "video" },
-                                { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600", type: "image" },
-                              ];
-                            } else if (currentMediaFolder === "Downloads") {
-                              displayItems = [
-                                { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184, type: "audio" },
-                                { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600", type: "image" },
-                              ];
-                            } else if (currentMediaFolder === "Audio Recordings") {
-                              displayItems = [
-                                { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372, type: "audio" },
-                                { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302, type: "audio" },
-                              ];
-                            } else if (currentMediaFolder === "Screenshots") {
-                              displayItems = [
-                                { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600", type: "image" },
-                                { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600", type: "image" },
-                              ];
+                            if (Capacitor.isNativePlatform() && deviceMedias.length > 0) {
+                              displayItems = deviceMedias.filter(item => item.folder === currentMediaFolder);
+                            } else {
+                              if (currentMediaFolder === "Camera Roll") {
+                                displayItems = [
+                                  { name: "Alpine Peaks", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4", duration: 15, thumbnail: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=400", type: "video" },
+                                  { name: "Sunset Drive", url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4", duration: 12, thumbnail: "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400", type: "video" },
+                                  { name: "Mountain Peak", url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                  { name: "Ocean Sunset", url: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                ];
+                              } else if (currentMediaFolder === "Downloads") {
+                                displayItems = [
+                                  { name: "Lofi Beats", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3", duration: 184, type: "audio" },
+                                  { name: "Cozy Study", url: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                ];
+                              } else if (currentMediaFolder === "Audio Recordings") {
+                                displayItems = [
+                                  { name: "Serene Nature", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", duration: 372, type: "audio" },
+                                  { name: "Luminous Synth", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3", duration: 302, type: "audio" },
+                                ];
+                              } else if (currentMediaFolder === "Screenshots") {
+                                displayItems = [
+                                  { name: "Neon Downtown", url: "https://images.unsplash.com/photo-1515621061946-eff1c2a352bd?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                  { name: "Retro Desert", url: "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&q=80&w=600", type: "image" },
+                                ];
+                              }
                             }
                           } else {
                             if (selectedMediaTab === "Image") {
-                              displayItems = sampleMediaImages.map(img => ({ ...img, type: "image" }));
+                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+                                ? deviceMedias.filter(item => item.type === "image")
+                                : sampleMediaImages.map(img => ({ ...img, type: "image" }));
                             } else if (selectedMediaTab === "Video") {
-                              displayItems = sampleMediaVideos.map(vid => ({ ...vid, type: "video" }));
+                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+                                ? deviceMedias.filter(item => item.type === "video")
+                                : sampleMediaVideos.map(vid => ({ ...vid, type: "video" }));
                             } else if (selectedMediaTab === "Audio") {
-                              displayItems = sampleMediaAudio.map(aud => ({ ...aud, type: "audio" }));
+                              displayItems = (Capacitor.isNativePlatform() && deviceMedias.length > 0)
+                                ? deviceMedias.filter(item => item.type === "audio")
+                                : sampleMediaAudio.map(aud => ({ ...aud, type: "audio" }));
                             }
                           }
 
@@ -5275,7 +5431,7 @@ const renderEditor = () => (
                                     handleSelectMediaItem(item);
                                     setActiveExpandedMenu(null);
                                   }}
-                                  className="group cursor-pointer bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-indigo-500/20 active:scale-98 rounded-2xl p-3 flex flex-col justify-between h-28 transition-all shadow-md"
+                                  className="group cursor-pointer bg-[#111115] hover:bg-[#16161c] border border-white/[0.05] hover:border-indigo-505/20 active:scale-98 rounded-2xl p-3 flex flex-col justify-between h-28 transition-all shadow-md"
                                 >
                                   <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-[1.05] transition-all">
                                     <Music size={12} />
@@ -5296,14 +5452,24 @@ const renderEditor = () => (
                                   }}
                                   className="group cursor-pointer relative bg-zinc-950 rounded-2xl overflow-hidden active:scale-98 border border-white/[0.04] hover:border-indigo-400/30 transition-all h-28 select-none shadow-md"
                                 >
-                                  <img 
-                                    src={item.thumbnail} 
-                                    alt={item.name} 
-                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
-                                    referrerPolicy="no-referrer"
-                                  />
+                                  {item.thumbnail ? (
+                                    <img 
+                                      src={item.thumbnail} 
+                                      alt={item.name} 
+                                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  ) : (
+                                    <video
+                                      src={item.url}
+                                      preload="metadata"
+                                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                      muted
+                                      playsInline
+                                    />
+                                  )}
                                   <div className="absolute top-2 right-2 bg-black/60 px-1.5 py-0.5 rounded-[4px] text-[8.5px] font-bold font-mono tracking-wider border border-white/5">
-                                    0:{(item.duration || 10)}
+                                    {Math.floor(item.duration / 60)}:{(item.duration % 60).toFixed(0).padStart(2, '0')}
                                   </div>
                                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent flex items-end p-2 sm:p-2.5">
                                     <span className="text-[10px] font-bold text-white truncate w-full flex items-center gap-1.5">
@@ -5851,9 +6017,9 @@ const renderEditor = () => (
                     target.setPointerCapture(e.pointerId);
 
                     const updateSeek = (clientX: number) => {
-                      const rx = clientX - 100;
-                      const rect = target.getBoundingClientRect();
-                      const x = rx + timelineScrollRef.current!.scrollLeft;
+                      const innerRect = document.getElementById("timeline-inner")?.getBoundingClientRect();
+                      if (!innerRect) return;
+                      const x = clientX - innerRect.left;
                       let newTime = Math.max(
                         0,
                         x / currentPixelsPerSecondRef.current,
@@ -6623,17 +6789,36 @@ const renderEditor = () => (
 
                       {/* Empty state instruction inside timeline */}
                       {layers.length === 0 && (
-                        <div className="w-full h-[155px] flex flex-col items-center justify-center py-10 text-zinc-450 gap-3 max-w-md mx-auto select-none">
-                          <div className="w-12 h-12 rounded-full bg-zinc-900/50 border border-white/[0.04] flex items-center justify-center shadow-lg">
-                            <PlusIcon className="text-zinc-500" size={18} />
-                          </div>
+                        <div className="w-full h-[155px] flex flex-col items-center justify-center py-5 text-zinc-450 gap-2.5 max-w-sm mx-auto select-none">
                           <div className="text-center">
-                            <span className="text-xs font-semibold text-zinc-400 mb-1 block uppercase tracking-wider">
+                            <span className="text-xs font-extrabold text-zinc-300 mb-0.5 block uppercase tracking-widest font-sans">
                               Timeline is Empty
                             </span>
-                            <span className="text-[11px] text-zinc-500 leading-relaxed font-sans block max-w-[280px] mx-auto">
-                              Press the plus icon next to track headers to begin crafting your slow-motion compilation.
+                            <span className="text-[10px] text-zinc-500 leading-relaxed font-sans block mb-3">
+                              Begin your slow-motion masterwork by importing native files or creating text layers.
                             </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveExpandedMenu("plus-media");
+                              }}
+                              className="px-3.5 py-1.5 bg-indigo-650 hover:bg-indigo-600 active:scale-95 text-white font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all border border-indigo-500/10 cursor-pointer flex items-center gap-1.5 shadow-md shadow-indigo-950/20"
+                            >
+                              <PlusIcon size={12} />
+                              <span>Import Media</span>
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAddText();
+                              }}
+                              className="px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 active:scale-95 text-zinc-300 hover:text-white font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all border border-white/5 cursor-pointer flex items-center gap-1.5"
+                            >
+                              <Type size={12} strokeWidth={2.2} />
+                              <span>Add Text</span>
+                            </button>
                           </div>
                         </div>
                       )}

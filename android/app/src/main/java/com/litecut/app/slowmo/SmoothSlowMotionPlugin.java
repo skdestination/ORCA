@@ -200,7 +200,12 @@ public class SmoothSlowMotionPlugin extends Plugin {
             return;
         }
 
-        Log.i(TAG, "Starting decodeAllFrames (OpenCV + DIS) for: " + inputPath);
+        try {
+            Log.i(TAG, "[AUDIT] Stage 1: Export button pressed");
+        } catch (Throwable t) {
+            Log.e(TAG, "[AUDIT] Stage 1 log failed with stack trace:", t);
+        }
+        Log.i(TAG, "[AUDIT] Stage 1: Export/Processing native call received (decodeAllFrames) for: " + inputPath);
 
         // Integrate OpenCV Android SDK
         if (!OpenCVLoader.initDebug()) {
@@ -277,9 +282,15 @@ public class SmoothSlowMotionPlugin extends Plugin {
 
             extractor.selectTrack(trackIndex);
             
-            decoder = MediaCodec.createDecoderByType(mime);
-            decoder.configure(format, null, null, 0);
-            decoder.start();
+            try {
+                decoder = MediaCodec.createDecoderByType(mime);
+                decoder.configure(format, null, null, 0);
+                decoder.start();
+                Log.i(TAG, "[AUDIT] Stage 2: Decoder initialized");
+            } catch (Throwable t) {
+                Log.e(TAG, "[AUDIT] Stage 2: Decoder initialize failed with stack trace:", t);
+                throw t;
+            }
 
             if (format.containsKey(MediaFormat.KEY_DURATION)) {
                 durationUs = format.getLong(MediaFormat.KEY_DURATION);
@@ -344,7 +355,16 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         Mat prevMat = null;
 
                         // Retrieve full color video frame using getOutputImage
-                        Image image = decoder.getOutputImage(outputBufferIndex);
+                        Image image = null;
+                        try {
+                            image = decoder.getOutputImage(outputBufferIndex);
+                            if (frameCount == 1) {
+                                Log.i(TAG, "[AUDIT] Stage 3: First frame decoded");
+                            }
+                        } catch (Throwable t) {
+                            Log.e(TAG, "[AUDIT] Stage 3: First frame decoded failed with stack trace:", t);
+                            throw t;
+                        }
                         if (image != null) {
                             try {
                                 // Reinitialize preallocated Mats dynamically if dimension changes or at start
@@ -436,6 +456,14 @@ public class SmoothSlowMotionPlugin extends Plugin {
                             
                             // On second frame onwards, run DIS Dense Optical Flow
                             if (frameCount > 1) {
+                                if (frameCount == 2) {
+                                    try {
+                                        Log.i(TAG, "[AUDIT] Stage 4: Interpolation started");
+                                    } catch (Throwable t) {
+                                        Log.e(TAG, "[AUDIT] Stage 4: Interpolation started failed with stack trace:", t);
+                                        throw t;
+                                    }
+                                }
                                 try {
                                     Mat prevGray = new Mat();
                                     Mat currGray = new Mat();
@@ -671,6 +699,21 @@ public class SmoothSlowMotionPlugin extends Plugin {
             }
 
             Log.i(TAG, "Finished processing sequence. Count: " + frameCount + ", Verified: " + timestampsVerified + ", Flow run: " + flowComputedCount + ", Global Avg Flow: " + globalAvgFlow + ", Interpolated: " + interpolatedFramesCount + " (avg PSNR: " + averagePsnr + " dB)");
+            if (outputPath != null) {
+                try {
+                    File outFile = new File(outputPath);
+                    if (outFile.exists() && outFile.length() > 0) {
+                        Log.i(TAG, "[AUDIT] Stage 10: Output file saved successfully. Size: " + outFile.length() + " bytes. Path: " + outputPath);
+                        Log.i(TAG, "[AUDIT] Stage 10: Output file saved");
+                    } else {
+                        Log.w(TAG, "[AUDIT] Stage 10: Output file saved failed! File is empty or does not exist at path: " + outputPath);
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "[AUDIT] Stage 10: Output file saved verification error with stack trace:", t);
+                }
+            } else {
+                Log.w(TAG, "[AUDIT] Stage 10: Output path is null, file was not saved!");
+            }
             call.resolve(result);
 
         } catch (Exception e) {
@@ -794,6 +837,7 @@ public class SmoothSlowMotionPlugin extends Plugin {
         private int mSubmittedCount = 0;
         private int mQueuedCount = 0;
         private int mWrittenCount = 0;
+        private boolean mFirstOutputReceived = false;
 
         public VideoEncoderCore(String outputPath, int width, int height, int fps) throws Exception {
             mWidth = width;
@@ -827,6 +871,13 @@ public class SmoothSlowMotionPlugin extends Plugin {
         }
 
         public void encodeFrame(Mat bgrMat, long ptsUs) throws Exception {
+            if (mSubmittedCount == 0) {
+                try {
+                    Log.i("VideoEncoderCore", "[AUDIT] Stage 5: First frame submitted to encoder");
+                } catch (Throwable t) {
+                    Log.e("VideoEncoderCore", "[AUDIT] Stage 5: First frame submitted to encoder log failed with stack trace:", t);
+                }
+            }
             mSubmittedCount++;
             int inputBufferIndex = -1;
             int dequeueAttempt = 0;
@@ -928,7 +979,15 @@ public class SmoothSlowMotionPlugin extends Plugin {
 
                 image.close();
             }
-            mEncoder.queueInputBuffer(inputBufferIndex, 0, mWidth * mHeight * 3 / 2, ptsUs, 0);
+            try {
+                mEncoder.queueInputBuffer(inputBufferIndex, 0, mWidth * mHeight * 3 / 2, ptsUs, 0);
+                if (mQueuedCount == 0) {
+                    Log.i("VideoEncoderCore", "[AUDIT] Stage 5: First frame submitted to encoder successfully");
+                }
+            } catch (Throwable t) {
+                Log.e("VideoEncoderCore", "[AUDIT] Stage 5: First frame queueInputBuffer failed with stack trace:", t);
+                throw t;
+            }
             mQueuedCount++;
 
             drainEncoder(false);
@@ -966,12 +1025,26 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         throw new RuntimeException("Encoder output format changed twice");
                     }
                     MediaFormat newFormat = mEncoder.getOutputFormat();
-                    mTrackIndex = mMuxer.addTrack(newFormat);
-                    mMuxer.start();
-                    mMuxerStarted = true;
+                    try {
+                        mTrackIndex = mMuxer.addTrack(newFormat);
+                        mMuxer.start();
+                        mMuxerStarted = true;
+                        Log.i("VideoEncoderCore", "[AUDIT] Stage 7: MediaMuxer started");
+                    } catch (Throwable t) {
+                        Log.e("VideoEncoderCore", "[AUDIT] Stage 7: MediaMuxer started failed with stack trace:", t);
+                        throw t;
+                    }
                 } else if (encoderStatus < 0) {
                     // Ignore other statuses
                 } else {
+                    if (!mFirstOutputReceived) {
+                        try {
+                            mFirstOutputReceived = true;
+                            Log.i("VideoEncoderCore", "[AUDIT] Stage 6: Encoder output buffer received");
+                        } catch (Throwable t) {
+                            Log.e("VideoEncoderCore", "[AUDIT] Stage 6: Encoder output buffer received log failed with stack trace:", t);
+                        }
+                    }
                     ByteBuffer encodedData = mEncoder.getOutputBuffer(encoderStatus);
                     if (encodedData == null) {
                         throw new RuntimeException("Encoder output buffer flat layout");
@@ -987,8 +1060,7 @@ public class SmoothSlowMotionPlugin extends Plugin {
                         }
                         encodedData.position(mBufferInfo.offset);
                         encodedData.limit(mBufferInfo.offset + mBufferInfo.size);
-                        mMuxer.writeSampleData(mTrackIndex, encodedData, mBufferInfo);
-                        mWrittenCount++;
+                        try { mMuxer.writeSampleData(mTrackIndex, encodedData, mBufferInfo); mWrittenCount++; if (mWrittenCount == 1) { Log.i("VideoEncoderCore", "[AUDIT] Stage 8: First frame written to muxer"); } } catch (Throwable t) { Log.e("VideoEncoderCore", "[AUDIT] Stage 8: Write sample data failed with stack trace:", t); throw t; }
                     }
 
                     mEncoder.releaseOutputBuffer(encoderStatus, false);
@@ -1012,8 +1084,12 @@ public class SmoothSlowMotionPlugin extends Plugin {
             }
             if (mMuxer != null) {
                 try {
+                    Log.i("VideoEncoderCore", "[AUDIT] Stage 9: Stopping MediaMuxer...");
                     mMuxer.stop();
-                } catch (Exception ignored) {}
+                    Log.i("VideoEncoderCore", "[AUDIT] Stage 9: MediaMuxer stopped");
+                } catch (Throwable t) {
+                    Log.e("VideoEncoderCore", "[AUDIT] Stage 9: MediaMuxer stop failed with stack trace:", t);
+                }
                 try {
                     mMuxer.release();
                 } catch (Exception ignored) {}

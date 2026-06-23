@@ -518,23 +518,27 @@ function ProjectCoverImage({ p }: { p: Project }) {
 }
 
 const getBestSupportedVideoType = () => {
+  const isSafari = typeof navigator !== "undefined" && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  const defaultExt = isSafari ? "mp4" : "webm";
   const types = [
     { mime: "video/mp4;codecs=avc1", ext: "mp4" },
+    { mime: "video/mp4;codecs=h264", ext: "mp4" },
     { mime: "video/mp4", ext: "mp4" },
     { mime: "video/webm;codecs=h264", ext: "webm" },
     { mime: "video/webm;codecs=vp9", ext: "webm" },
     { mime: "video/webm;codecs=vp8", ext: "webm" },
     { mime: "video/webm", ext: "webm" },
+    { mime: "video/quicktime", ext: "mov" },
   ];
   if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
-    return { mime: "video/webm", ext: "webm" };
+    return { mime: "", ext: defaultExt };
   }
   for (const t of types) {
     if (MediaRecorder.isTypeSupported(t.mime)) {
       return t;
     }
   }
-  return { mime: "video/webm", ext: "webm" };
+  return { mime: "", ext: defaultExt };
 };
 
 // --- Performance-Optimizing Cached Waveform Resolver & Memoized Timeline Components ---
@@ -2571,151 +2575,180 @@ export default function App() {
   };
 
   const startExport = async () => {
-    let maxDuration = 0;
-    for (const c of clips) {
-      if (c.leftSeconds + c.durationSeconds > maxDuration) {
-        maxDuration = c.leftSeconds + c.durationSeconds;
+    console.log("[AUDIT] Stage 1: Export button pressed");
+    try {
+      let maxDuration = 0;
+      for (const c of clips) {
+        if (c.leftSeconds + c.durationSeconds > maxDuration) {
+          maxDuration = c.leftSeconds + c.durationSeconds;
+        }
       }
-    }
-    if (maxDuration === 0) {
-      showToast("No clips to export.");
-      setIsExportExpanded(false);
-      return;
-    }
-
-    setIsExportExpanded(false);
-    setIsExporting(true);
-    setExportProgress(0);
-    setCurrentTime(0);
-    setIsPlaying(false);
-
-    await new Promise((r) => setTimeout(r, 600)); // wait for video seek
-
-    const canvas = document.createElement("canvas");
-    let exportWidth = 1920;
-    let exportHeight = 1080;
-    if (exportResolution === "4K") {
-      exportWidth = 3840;
-      exportHeight = 2160;
-    }
-    if (exportResolution === "2K") {
-      exportWidth = 2560;
-      exportHeight = 1440;
-    }
-
-    const [rw, rh] = currentProjectRatio.split(":").map(Number);
-    if (rw && rh) {
-      if (rw < rh) {
-        canvas.height = exportHeight;
-        canvas.width = exportHeight * (rw / rh);
-      } else {
-        canvas.width = exportWidth;
-        canvas.height = exportWidth * (rh / rw);
-      }
-    }
-    const ctx = canvas.getContext("2d")!;
-
-    const fps = parseInt(exportFps) || 30;
-    const stream = canvas.captureStream(fps);
-
-    const bestType = getBestSupportedVideoType();
-    const recorder = new MediaRecorder(stream, { mimeType: bestType.mime });
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: bestType.mime });
-      const url = URL.createObjectURL(blob);
-      setExportedVideoBlob(blob);
-      setExportedVideoUrl(url);
-      setIsExporting(false);
-      setExportProgress(0);
-      setIsPlaying(false);
-    };
-
-    recorder.start();
-    setIsPlaying(true);
-
-    const previewEl = document.getElementById("preview-screen");
-    const previewW = previewEl?.clientWidth || 1;
-    const previewH = previewEl?.clientHeight || 1;
-
-    const startTime = performance.now();
-    let rAF: number;
-    let playingLocal = true;
-
-    const drawFn = () => {
-      if (!playingLocal) return;
-
-      const elapsed = (performance.now() - startTime) / 1000;
-
-      if (elapsed >= maxDuration + 0.1) {
-        playingLocal = false;
-        recorder.stop();
+      if (maxDuration === 0) {
+        showToast("No clips to export.");
+        setIsExportExpanded(false);
         return;
       }
 
-      setExportProgress(
-        Math.min(100, Math.round((elapsed / maxDuration) * 100)),
-      );
+      setIsExportExpanded(false);
+      setIsExporting(true);
+      setExportProgress(0);
+      setCurrentTime(0);
+      setIsPlaying(false);
 
-      ctx.fillStyle = "black";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await new Promise((r) => setTimeout(r, 600)); // wait for video seek
 
-      const layerOrder = [...layers].sort((a, b) => a.order - b.order);
-      for (const layer of layerOrder) {
-        if (layer.isHidden) continue;
-        const clip = clips.find(
-          (c) =>
-            c.layerId === layer.id &&
-            elapsed >= c.leftSeconds &&
-            elapsed <= c.leftSeconds + c.durationSeconds,
-        );
-        if (!clip) continue;
-
-        const elId = `clip-media-${clip.id}`;
-        const el = document.getElementById(elId) as any;
-        if (el && (el.tagName === "IMG" || el.tagName === "VIDEO")) {
-          ctx.save();
-          ctx.translate(canvas.width / 2, canvas.height / 2);
-
-          const scaleX = canvas.width / previewW;
-          const scaleY = canvas.height / previewH;
-          const absTranslateX = (clip.translateX || 0) * scaleX;
-          const absTranslateY = (clip.translateY || 0) * scaleY;
-
-          ctx.translate(absTranslateX, absTranslateY);
-          ctx.rotate(((clip.rotation || 0) * Math.PI) / 180);
-          ctx.scale(clip.scale ?? 1, clip.scale ?? 1);
-
-          const imgW = el.videoWidth || el.naturalWidth || canvas.width;
-          const imgH = el.videoHeight || el.naturalHeight || canvas.height;
-          if (imgW && imgH) {
-            const imgRatio = imgW / imgH;
-            const canvasRatio = canvas.width / canvas.height;
-            let drawWidth, drawHeight;
-            if (imgRatio > canvasRatio) {
-              drawHeight = canvas.height;
-              drawWidth = canvas.height * imgRatio;
-            } else {
-              drawWidth = canvas.width;
-              drawHeight = canvas.width / imgRatio;
-            }
-            ctx.drawImage(
-              el,
-              -drawWidth / 2,
-              -drawHeight / 2,
-              drawWidth,
-              drawHeight,
-            );
-          }
-          ctx.restore();
-        }
+      const canvas = document.createElement("canvas");
+      let exportWidth = 1920;
+      let exportHeight = 1080;
+      if (exportResolution === "4K") {
+        exportWidth = 3840;
+        exportHeight = 2160;
       }
+      if (exportResolution === "2K") {
+        exportWidth = 2560;
+        exportHeight = 1440;
+      }
+
+      const [rw, rh] = currentProjectRatio.split(":").map(Number);
+      if (rw && rh) {
+        if (rw < rh) {
+          let tempH = exportHeight;
+          let tempW = Math.round(exportHeight * (rw / rh));
+          if (tempW % 2 !== 0) tempW += 1;
+          if (tempH % 2 !== 0) tempH += 1;
+          canvas.width = tempW;
+          canvas.height = tempH;
+        } else {
+          let tempW = exportWidth;
+          let tempH = Math.round(exportWidth * (rh / rw));
+          if (tempW % 2 !== 0) tempW += 1;
+          if (tempH % 2 !== 0) tempH += 1;
+          canvas.width = tempW;
+          canvas.height = tempH;
+        }
+      } else {
+        canvas.width = exportWidth;
+        canvas.height = exportHeight;
+      }
+      const ctx = canvas.getContext("2d")!;
+
+      const fps = parseInt(exportFps) || 30;
+      const stream = canvas.captureStream(fps);
+
+      const bestType = getBestSupportedVideoType();
+      const recorderOptions: MediaRecorderOptions = {};
+      if (bestType.mime) {
+        recorderOptions.mimeType = bestType.mime;
+      }
+      
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        const mimeToUse = bestType.mime || recorder.mimeType || "video/mp4";
+        const blob = new Blob(chunks, { type: mimeToUse });
+        const url = URL.createObjectURL(blob);
+        setExportedVideoBlob(blob);
+        setExportedVideoUrl(url);
+        setIsExporting(false);
+        setExportProgress(0);
+        setIsPlaying(false);
+      };
+
+      recorder.start();
+      setIsPlaying(true);
+
+      const previewEl = document.getElementById("preview-screen");
+      const previewW = previewEl?.clientWidth || 1;
+      const previewH = previewEl?.clientHeight || 1;
+
+      const startTime = performance.now();
+      let rAF: number;
+      let playingLocal = true;
+
+      const drawFn = () => {
+        if (!playingLocal) return;
+
+        const elapsed = (performance.now() - startTime) / 1000;
+
+        if (elapsed >= maxDuration + 0.1) {
+          playingLocal = false;
+          recorder.stop();
+          return;
+        }
+
+        const currentClampedTime = Math.min(maxDuration, elapsed);
+        setCurrentTime(currentClampedTime);
+
+        setExportProgress(
+          Math.min(100, Math.round((elapsed / maxDuration) * 100)),
+        );
+
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const layerOrder = [...layers].sort((a, b) => a.order - b.order);
+        for (const layer of layerOrder) {
+          if (layer.isHidden) continue;
+          const clip = clips.find(
+            (c) =>
+              c.layerId === layer.id &&
+              elapsed >= c.leftSeconds &&
+              elapsed <= c.leftSeconds + c.durationSeconds,
+          );
+          if (!clip) continue;
+
+          const elId = `clip-media-${clip.id}`;
+          const el = document.getElementById(elId) as any;
+          if (el && (el.tagName === "IMG" || el.tagName === "VIDEO")) {
+            ctx.save();
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+
+            const scaleX = canvas.width / previewW;
+            const scaleY = canvas.height / previewH;
+            const absTranslateX = (clip.translateX || 0) * scaleX;
+            const absTranslateY = (clip.translateY || 0) * scaleY;
+
+            ctx.translate(absTranslateX, absTranslateY);
+            ctx.rotate(((clip.rotation || 0) * Math.PI) / 180);
+            ctx.scale(clip.scale ?? 1, clip.scale ?? 1);
+
+            const imgW = el.videoWidth || el.naturalWidth || canvas.width;
+            const imgH = el.videoHeight || el.naturalHeight || canvas.height;
+            if (imgW && imgH) {
+              const imgRatio = imgW / imgH;
+              const canvasRatio = canvas.width / canvas.height;
+              let drawWidth, drawHeight;
+              if (imgRatio > canvasRatio) {
+                drawHeight = canvas.height;
+                drawWidth = canvas.height * imgRatio;
+              } else {
+                drawWidth = canvas.width;
+                drawHeight = canvas.width / imgRatio;
+              }
+              ctx.drawImage(
+                el,
+                -drawWidth / 2,
+                -drawHeight / 2,
+                drawWidth,
+                drawHeight,
+              );
+            }
+            ctx.restore();
+          }
+        }
+        rAF = requestAnimationFrame(drawFn);
+      };
       rAF = requestAnimationFrame(drawFn);
-    };
-    rAF = requestAnimationFrame(drawFn);
+    } catch (err: any) {
+      console.error("[AUDIT] Stage 1 failed in startExport with stack trace:", err.stack || err);
+      setIsExporting(false);
+      setExportProgress(0);
+      setIsPlaying(false);
+      showToast(`Export failed: ${err.message || err.toString()}`);
+    }
   };
 
   const cleanupVoiceoverLayer = useCallback(() => {
@@ -3203,20 +3236,37 @@ export default function App() {
     setPillPopup({ message: `Importing ${item.name}...`, type: 'loading' });
     
     if (item.type === "image") {
-      addMediaClip(id, "image", item.url, 5, startAtTime, fileId);
-      setPillPopup({ message: `Imported ${item.name} clearly`, type: "info" });
-      setTimeout(() => setPillPopup(null), 2500);
+      const img = new Image();
+      img.onload = () => {
+        addMediaClip(id, "image", item.url, 5, startAtTime, fileId, img.naturalWidth, img.naturalHeight);
+        setPillPopup({ message: `Imported ${item.name} clearly`, type: "info" });
+        setTimeout(() => setPillPopup(null), 2500);
+      };
+      img.onerror = () => {
+        addMediaClip(id, "image", item.url, 5, startAtTime, fileId);
+        setPillPopup({ message: `Imported ${item.name} clearly`, type: "info" });
+        setTimeout(() => setPillPopup(null), 2500);
+      };
+      img.src = item.url;
     } else if (item.type === "audio") {
       addMediaClip(id, "audio", item.url, item.duration || 10, startAtTime, fileId);
       setPillPopup({ message: `Imported ${item.name} audio track`, type: "info" });
       setTimeout(() => setPillPopup(null), 2500);
     } else {
       setPillPopup({ message: "Parsing video structures...", type: 'loading' });
-      setTimeout(() => {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        addMediaClip(id, "video", item.url, item.duration || 12, startAtTime, fileId, video.videoWidth, video.videoHeight, 30);
+        setPillPopup({ message: `Loaded: ${video.videoWidth}x${video.videoHeight} @ 30 FPS`, type: 'info' });
+        setTimeout(() => setPillPopup(null), 2500);
+      };
+      video.onerror = () => {
         addMediaClip(id, "video", item.url, item.duration || 12, startAtTime, fileId, 1920, 1080, 30);
         setPillPopup({ message: `Loaded: 1920x1080 @ 30 FPS`, type: 'info' });
         setTimeout(() => setPillPopup(null), 2500);
-      }, 800);
+      };
+      video.src = item.url;
     }
   };
 
@@ -3362,8 +3412,21 @@ export default function App() {
         }
       }
     } else {
-      addMediaClip(id, type, src, 5, startAtTime, fileId);
-      addToLibrary(5);
+      if (type === "image") {
+        const img = new Image();
+        img.onload = () => {
+          addMediaClip(id, "image", src, 5, startAtTime, fileId, img.naturalWidth, img.naturalHeight);
+          addToLibrary(5);
+        };
+        img.onerror = () => {
+          addMediaClip(id, "image", src, 5, startAtTime, fileId);
+          addToLibrary(5);
+        };
+        img.src = src;
+      } else {
+        addMediaClip(id, type, src, 5, startAtTime, fileId);
+        addToLibrary(5);
+      }
     }
   };
 
@@ -3460,13 +3523,14 @@ export default function App() {
     const firstDuration = currentTime - clip.leftSeconds;
     const newClipId = "C_" + Math.random().toString(36).substring(2, 9);
     const speed = clip.speed || 1.0;
+    const fullOrgDur = clip.originalDurationSeconds !== undefined ? clip.originalDurationSeconds : clip.durationSeconds * speed;
 
     setClips((prev) => {
       const rest = prev.filter((c) => c.id !== selectedClipId);
       const newClip1 = {
         ...clip,
         durationSeconds: firstDuration,
-        originalDurationSeconds: firstDuration * speed,
+        originalDurationSeconds: fullOrgDur,
       };
       const newClip2 = {
         ...clip,
@@ -3474,7 +3538,7 @@ export default function App() {
         leftSeconds: currentTime,
         trimStartSeconds: clip.trimStartSeconds + firstDuration * speed,
         durationSeconds: clip.durationSeconds - firstDuration,
-        originalDurationSeconds: (clip.durationSeconds - firstDuration) * speed,
+        originalDurationSeconds: fullOrgDur,
       };
       return [...rest, newClip1, newClip2];
     });
@@ -6180,19 +6244,26 @@ const renderEditor = () => (
                                        : activeClip.text
                                    ) : (selectedClipId === activeClip.id ? "Type text..." : "")}
                                 </span>
-                              </div>
-                            )}
+                               </div>
+                             )}
 
-                            {activeClip.type === "image" && (
+                             {activeClip.type === "image" && (
                               <div
                                 className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
                                 style={{
                                      ...transformStyle,
-                                     ...(activeClip.cropRatio ? {
+                                     ...(activeClip.cropRatio && activeClip.cropRatio !== "None" ? {
                                         width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
                                         height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
+                                     } : activeClip.width && activeClip.height ? {
+                                        aspectRatio: `${activeClip.width} / ${activeClip.height}`,
+                                        width: "auto",
+                                        height: "auto",
+                                        maxWidth: "100%",
+                                        maxHeight: "100%",
                                      } : { width: '100%', height: '100%' }),
                                 }}
+
                               >
                                 <div
                                   className="w-full h-full relative"
@@ -6227,9 +6298,15 @@ const renderEditor = () => (
                                  className="media-preview-container absolute pointer-events-none select-none overflow-visible max-w-full max-h-full flex items-center justify-center relative shadow-lg"
                                  style={{
                                       ...transformStyle,
-                                      ...(activeClip.cropRatio ? {
+                                      ...(activeClip.cropRatio && activeClip.cropRatio !== "None" ? {
                                          width: activeClip.cropRatio === "16:9" ? "100%" : activeClip.cropRatio === "9:16" ? "auto" : activeClip.cropRatio === "1:1" ? "auto" : "100%",
                                          height: activeClip.cropRatio ? (activeClip.cropRatio === "16:9" ? "auto" : activeClip.cropRatio === "9:16" ? "100%" : activeClip.cropRatio === "1:1" ? "100%" : "100%") : '100%',
+                                      } : activeClip.width && activeClip.height ? {
+                                         aspectRatio: `${activeClip.width} / ${activeClip.height}`,
+                                         width: "auto",
+                                         height: "auto",
+                                         maxWidth: "100%",
+                                         maxHeight: "100%",
                                       } : { width: '100%', height: '100%' }),
                                  }}
                                >
@@ -8190,7 +8267,7 @@ const renderEditor = () => (
                           if (!target) return prev;
                           
                           const oldSpeed = target.speed || 1;
-                          const originalDur = target.originalDurationSeconds || (target.durationSeconds * oldSpeed);
+                          const originalDur = target.durationSeconds * oldSpeed;
                           const newDuration = originalDur / val;
                           const delta = newDuration - target.durationSeconds;
                           
@@ -8214,7 +8291,7 @@ const renderEditor = () => (
                           if (!target) return prev;
                           
                           const oldSpeed = target.speed || 1;
-                          const originalDur = target.originalDurationSeconds || (target.durationSeconds * oldSpeed);
+                          const originalDur = target.durationSeconds * oldSpeed;
                           const newDuration = originalDur / 1;
                           const delta = newDuration - target.durationSeconds;
                           

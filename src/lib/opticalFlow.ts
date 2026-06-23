@@ -145,6 +145,7 @@ export async function processSmoothSlowMoBrowser(
   averageWarpError?: number;
   interpolationVisualization?: string;
 }> {
+  console.log("[AUDIT] Stage 1: Export/Processing button pressed / initiated in processSmoothSlowMoBrowser");
 
   if (!Capacitor.isNativePlatform()) {
     console.log("Web platform detected. Native plugin not used.");
